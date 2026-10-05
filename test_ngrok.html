@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Gateway Test</title>
+
+  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+</head>
+<body>
+  <h1>AI Gateway Dashboard</h1>
+  <p>Tất cả request được gửi tới Gateway (Ngrok Public URL)</p>
+
+  <h2>1. NSFW Detection</h2>
+  <form method="POST"
+        action="https://zipppier-henry-bananas.ngrok-free.dev/analyze"
+        enctype="multipart/form-data">
+    <input type="file" name="image" accept="image/*" required />
+    <button type="submit">Analyze NSFW</button>
+  </form>
+
+  <hr />
+
+  <h2>2. Image Captioning</h2>
+  <form method="POST"
+        action="https://zipppier-henry-bananas.ngrok-free.dev/caption"
+        enctype="multipart/form-data">
+    <input type="file" name="image" accept="image/*" required />
+    <button type="submit">Generate Caption</button>
+  </form>
+
+  <hr />
+
+  <h2 style="color: #0d6efd;">3. Custom AI Description</h2>
+  <p>Nhập yêu cầu tiếng Việt, AI sẽ trả lời tiếng Việt (Chạy qua Gateway -> Ollama).</p>
+  
+  <div>
+    <label><b>Chọn ảnh:</b></label> 
+    <input type="file" id="customImg" accept="image/*" />
+  </div>
+  <br>
+  <div>
+    <label><b>Yêu cầu (Prompt):</b></label><br>
+    <textarea id="customPrompt" rows="3" cols="60" placeholder="Ví dụ: Hãy làm một bài thơ lục bát về bức ảnh này..."></textarea>
+  </div>
+  <br>
+  <button id="btnCustom" style="padding: 8px 15px; background: #0d6efd; color: white; border: none; cursor: pointer;">Gửi cho AI</button>
+  
+  <div id="customResult" style="margin-top: 10px; background: #f0f0f0; padding: 15px; border-radius: 5px; white-space: pre-line; display: none; border-left: 5px solid #0d6efd;"></div>
+
+  <hr />
+
+  <h2>4. Image → 3D (Hunyuan3D)</h2>
+  <input type="file" id="img3d" accept="image/*" />
+  <button id="btn3d" style="padding: 8px 15px; background: #198754; color: white; border: none; cursor: pointer;">Generate 3D</button>
+
+  <p id="status3d" style="font-weight: bold;"></p>
+
+  <model-viewer id="viewer"
+    style="width: 100%; max-width: 600px; height: 400px; border: 1px solid #ccc; background-color: #eee;"
+    camera-controls
+    auto-rotate
+    exposure="1.0"
+    environment-image="neutral">
+  </model-viewer>
+
+  <p>
+    <a id="downloadGlb" href="#" download="model.glb" style="display:none; color: blue; text-decoration: underline;">
+      Download GLB Model
+    </a>
+  </p>
+
+  <script>
+    // --- CẤU HÌNH URL ---
+    // Đây là địa chỉ Ngrok của Gateway. Nếu bạn tắt/bật lại ngrok và có link mới, hãy thay vào đây.
+    const BASE_URL = "https://zipppier-henry-bananas.ngrok-free.dev/"; 
+
+    // ======================================================
+    // LOGIC CHO CUSTOM AI (Gọi Endpoint: /custom_describe)
+    // ======================================================
+    const btnCustom = document.getElementById('btnCustom');
+    const customImgInput = document.getElementById('customImg');
+    const customPromptInput = document.getElementById('customPrompt');
+    const customResultBox = document.getElementById('customResult');
+
+    btnCustom.onclick = async () => {
+      const file = customImgInput.files[0];
+      const promptText = customPromptInput.value;
+
+      if (!file) {
+        alert('Vui lòng chọn ảnh!');
+        return;
+      }
+
+      // Hiện trạng thái Loading
+      customResultBox.style.display = 'block';
+      customResultBox.innerHTML = '⏳ <i>Đang xử lý... (Gateway đang chuyển yêu cầu tới Ollama Service)...</i>';
+      btnCustom.disabled = true;
+      btnCustom.innerText = "Đang gửi...";
+
+      const formData = new FormData();
+      formData.append('image', file);
+      formData.append('prompt', promptText);
+
+      try {
+        // Gửi request tới Gateway
+        const res = await fetch(`${BASE_URL}custom_describe`, {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!res.ok) {
+          throw new Error(`Lỗi Server Gateway: ${res.status}`);
+        }
+
+        const data = await res.json();
+        
+        if (data.error) {
+           customResultBox.innerText = '⚠️ Lỗi từ Service: ' + data.error;
+        } else {
+           // Hiển thị kết quả thành công
+           customResultBox.innerHTML = `<b>🤖 AI Trả lời:</b><br><br>${data.result}`;
+        }
+
+      } catch (err) {
+        console.error(err);
+        customResultBox.innerText = '❌ Lỗi kết nối: ' + err.message + '\n(Hãy kiểm tra xem Gateway và Ngrok có đang chạy không)';
+      } finally {
+        btnCustom.disabled = false;
+        btnCustom.innerText = "Gửi cho AI";
+      }
+    };
+
+    // ======================================================
+    // LOGIC CHO 3D GENERATION (Gọi Endpoint: /generate3d)
+    // ======================================================
+    const btn3d = document.getElementById('btn3d');
+    const fileInput3d = document.getElementById('img3d');
+    const viewer = document.getElementById('viewer');
+    const statusEl = document.getElementById('status3d');
+    const downloadLink = document.getElementById('downloadGlb');
+
+    btn3d.onclick = async () => {
+      const file = fileInput3d.files[0];
+      if (!file) {
+        alert('Chọn một ảnh trước đã');
+        return;
+      }
+
+      statusEl.textContent = '⏳ Đang gửi ảnh lên Gateway, vui lòng đợi model 3D (khoảng 30s - 1 phút)...';
+      statusEl.style.color = "blue";
+      downloadLink.style.display = 'none';
+      viewer.src = '';
+      btn3d.disabled = true;
+
+      const formData = new FormData();
+      formData.append('image', file);
+
+      try {
+        const res = await fetch(`${BASE_URL}generate3d`, {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!res.ok) {
+          const text = await res.text();
+          statusEl.textContent = '❌ Lỗi Gateway: ' + res.status + ' - ' + text;
+          statusEl.style.color = "red";
+          return;
+        }
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+
+        // Load GLB lên viewer
+        viewer.src = url;
+
+        // Cho người dùng tải file xuống
+        downloadLink.href = url;
+        downloadLink.style.display = 'inline-block';
+
+        statusEl.textContent = '✅ Xong! (Done)';
+        statusEl.style.color = "green";
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = '❌ Lỗi request: ' + err;
+        statusEl.style.color = "red";
+      } finally {
+        btn3d.disabled = false;
+      }
+    };
+  </script>
+</body>
+</html>

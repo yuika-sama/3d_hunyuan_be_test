@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Local Gateway Test</title>
+</head>
+<body>
+  <h1>Gateway Local Test</h1>
+
+  <h2>NSFW Detection</h2>
+  <form id="nsfwForm" method="POST" action="http://127.0.0.1:8000/analyze" enctype="multipart/form-data">
+    <input type="file" name="image" accept="image/*" required />
+    <button type="submit">Analyze</button>
+  </form>
+
+  <hr />
+
+  <h2>Image Captioning</h2>
+  <form id="captionForm" method="POST" action="http://127.0.0.1:8000/caption" enctype="multipart/form-data">
+    <input type="file" name="image" accept="image/*" required />
+    <input type="text" name="prompt" placeholder="optional prompt" />
+    <input type="number" name="max_new_tokens" value="60" />
+    <button type="submit">Caption</button>
+  </form>
+
+</body>
+</html>

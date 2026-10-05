@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Groq Vision (Llama 3.2)</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; max-width: 700px; margin: 0 auto; background-color: #f4f4f9; }
+        .box { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        h1 { color: #f55036; text-align: center; margin-bottom: 30px; } /* Màu cam đặc trưng của Groq */
+        
+        label { font-weight: bold; display: block; margin-bottom: 8px; color: #333; }
+        input[type="file"] { margin-bottom: 20px; width: 100%; padding: 10px; background: #eee; border-radius: 6px; }
+        
+        textarea { width: 100%; height: 80px; margin-bottom: 20px; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-family: inherit; resize: vertical; }
+        
+        button { width: 100%; padding: 12px; background: #f55036; color: white; border: none; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; transition: background 0.3s; }
+        button:hover { background: #d43d25; }
+        
+        #result { margin-top: 25px; padding: 20px; border-radius: 8px; background: #fff; border: 1px solid #e0e0e0; min-height: 50px; white-space: pre-wrap; line-height: 1.6; }
+        .loading { color: #f55036; font-style: italic; font-weight: bold; text-align: center; display: block; }
+        .error { color: red; background: #ffe6e6; padding: 10px; border-radius: 6px; }
+    </style>
+</head>
+<body>
+    <h1>⚡ Test Groq Vision AI</h1>
+    
+    <div class="box">
+        <label>1. Chọn ảnh cần phân tích:</label>
+        <input type="file" id="imageInput" accept="image/*">
+
+        <label>2. Bạn muốn AI làm gì?</label>
+        <textarea id="promptInput" placeholder="Ví dụ: Mô tả chi tiết bức ảnh này..."></textarea>
+        <div style="font-size: 0.85em; color: #666; margin-top: -15px; margin-bottom: 20px;">
+            <i>Gợi ý: "Trích xuất chữ trong ảnh (OCR)", "Liệt kê danh sách đồ vật dạng JSON", "Dịch menu này sang tiếng Việt"...</i>
+        </div>
+
+        <button onclick="sendRequest()">🚀 Gửi yêu cầu</button>
+
+        <div id="result">Kết quả sẽ hiện ở đây...</div>
+    </div>
+
+    <script>
+        async function sendRequest() {
+            const fileInput = document.getElementById('imageInput');
+            const promptInput = document.getElementById('promptInput');
+            const resultDiv = document.getElementById('result');
+
+            if (!fileInput.files[0]) {
+                alert("⚠️ Vui lòng chọn ảnh trước!");
+                return;
+            }
+
+            // Hiển thị loading
+            resultDiv.innerHTML = '<span class="loading">Đang gửi sang Groq (Llama 3.2)... chờ chút nhé ⏳</span>';
+
+            const formData = new FormData();
+            formData.append("image", fileInput.files[0]);
+            // Nếu không nhập gì, dùng prompt mặc định
+            formData.append("prompt", promptInput.value || "Describe this image in detail");
+
+            try {
+                // Gọi vào main.py đang chạy ở port 5002
+                const response = await fetch("http://127.0.0.1:5002/caption", {
+                    method: "POST",
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    resultDiv.innerHTML = `<div class="error">❌ Lỗi: ${data.caption}</div>`;
+                } else {
+                    resultDiv.innerHTML = `<b>✅ Kết quả:</b><br>${data.caption}`;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="error">❌ Lỗi kết nối server: ${error.message}<br>Đảm bảo bạn đã chạy file main.py!</div>`;
+            }
+        }
+    </script>
+</body>
+</html>

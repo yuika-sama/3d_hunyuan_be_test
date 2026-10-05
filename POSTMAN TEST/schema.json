@@ -1,0 +1,82 @@
+{
+  "info": {
+    "name": "AI Image Tools (NSFW + Caption)",
+    "_postman_id": "f7b8f202-9a12-4f8c-bb8d-5679e58e1123",
+    "description": "Test the Node backend endpoints for NSFW detection and BLIP captioning.\n\n**Base URL:** {{base_url}}\n\nMake sure Python services are running:\n- NSFW FastAPI at http://localhost:8001\n- BLIP Caption FastAPI at http://localhost:8002",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "🔍 NSFW Detection (POST /api/moderate)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "image",
+              "type": "file",
+              "src": ""
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{base_url}}/api/moderate",
+          "host": ["{{base_url}}"],
+          "path": ["api", "moderate"]
+        },
+        "description": "Upload an image file to check if it's NSFW.\n\n**Response:**\n```json\n{\n  \"ok\": true,\n  \"scores\": {\"Normal\": 0.95, ...},\n  \"top_label\": \"Normal\",\n  \"is_nsfw\": false\n}\n```"
+      },
+      "response": []
+    },
+    {
+      "name": "🖼️ Image Captioning (POST /api/caption)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "image",
+              "type": "file",
+              "src": ""
+            },
+            {
+              "key": "prompt",
+              "value": "describe the image shortly",
+              "type": "text"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{base_url}}/api/caption",
+          "host": ["{{base_url}}"],
+          "path": ["api", "caption"]
+        },
+        "description": "Generate an English caption for an image using BLIP.\n\n**Response:**\n```json\n{\n  \"ok\": true,\n  \"caption\": \"a cat sitting on a couch\"\n}\n```"
+      },
+      "response": []
+    },
+    {
+      "name": "✅ Healthcheck (GET /api/health)",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{base_url}}/api/health",
+          "host": ["{{base_url}}"],
+          "path": ["api", "health"]
+        },
+        "description": "Check if the Node backend is alive."
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:4000"
+    }
+  ]
+}

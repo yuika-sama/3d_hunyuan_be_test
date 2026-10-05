@@ -1,0 +1,15 @@
+# Ignore virtual environments
+.venv/
+venv/
+env/
+__pycache__/
+
+# Ignore large binary files and installers
+*.exe
+*.dll
+*.iso
+*.zip
+*.tar.gz
+
+# Ignore local VS Code settings
+.vscode/
