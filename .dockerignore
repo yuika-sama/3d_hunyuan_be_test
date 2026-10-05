@@ -1,0 +1,23 @@
+.git/
+.github/
+.vscode/
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+uploads/
+gradio_cache/
+temp_*
+*.glb
+*.obj
+*.png
+*.jpg
+*.jpeg
+*.bat
+docs/
+*.html
+POSTMAN TEST/

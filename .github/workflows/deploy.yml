@@ -1,0 +1,144 @@
+name: Build, Test and Deploy to Runpod Serverless
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    name: Run Unit and Mock Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install Test Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch pillow httpx runpod pytest deep-translator
+
+      - name: Run Pytest
+        run: |
+          python -m pytest test_handler.py -v
+
+  build-and-push:
+    name: Build & Push Docker Image to GHCR
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare Image Tags
+        id: meta
+        run: |
+          LOWERCASE_IMAGE=$(echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+          COMMIT_TAG="${LOWERCASE_IMAGE}:sha-${{ github.sha }}"
+          LATEST_TAG="${LOWERCASE_IMAGE}:latest"
+          echo "image_tag=${COMMIT_TAG}" >> "$GITHUB_OUTPUT"
+          echo "tag_commit=${COMMIT_TAG}" >> "$GITHUB_ENV"
+          echo "tag_latest=${LATEST_TAG}" >> "$GITHUB_ENV"
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.tag_commit }}
+            ${{ env.tag_latest }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-runpod:
+    name: Update Runpod Template & Smoke Test
+    needs: [build-and-push]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Runpod Serverless
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          RUNPOD_TEMPLATE_ID: ${{ vars.RUNPOD_TEMPLATE_ID }}
+          RUNPOD_ENDPOINT_ID: ${{ vars.RUNPOD_ENDPOINT_ID }}
+          NEW_IMAGE: ${{ needs.build-and-push.outputs.image_tag }}
+        run: |
+          if [ -z "$RUNPOD_API_KEY" ] || [ -z "$RUNPOD_TEMPLATE_ID" ]; then
+            echo "::warning ::RUNPOD_API_KEY or RUNPOD_TEMPLATE_ID is not configured. Skipping automated template update."
+            echo "The image has been pushed to: $NEW_IMAGE"
+            exit 0
+          fi
+
+          echo "Fetching current template info for rollback safety..."
+          TEMPLATE_INFO=$(curl -s -X GET "https://rest.runpod.io/v1/templates/${RUNPOD_TEMPLATE_ID}" \
+            -H "Authorization: Bearer ${RUNPOD_API_KEY}")
+
+          PREV_IMAGE=$(echo "$TEMPLATE_INFO" | grep -o '"imageName":"[^"]*' | cut -d'"' -f4 || true)
+          echo "Previous Image: ${PREV_IMAGE:-unknown}"
+
+          echo "Updating Runpod template to: ${NEW_IMAGE}..."
+          UPDATE_RES=$(curl -s -w "\n%{http_code}" -X PATCH "https://rest.runpod.io/v1/templates/${RUNPOD_TEMPLATE_ID}" \
+            -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{\"imageName\": \"${NEW_IMAGE}\"}")
+
+          HTTP_CODE=$(echo "$UPDATE_RES" | tail -n1)
+          BODY=$(echo "$UPDATE_RES" | sed '$d')
+
+          if [ "$HTTP_CODE" -ne 200 ] && [ "$HTTP_CODE" -ne 204 ]; then
+            echo "::error ::Failed to update Runpod template. HTTP $HTTP_CODE: $BODY"
+            exit 1
+          fi
+
+          echo "Template successfully updated to $NEW_IMAGE."
+
+          if [ -n "$RUNPOD_ENDPOINT_ID" ]; then
+            echo "Waiting 15s for worker warm-up..."
+            sleep 15
+
+            echo "Running smoke test on endpoint: $RUNPOD_ENDPOINT_ID..."
+            DUMMY_PNG="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+            SMOKE_PAYLOAD="{\"input\": {\"action\": \"analyze\", \"image_base64\": \"$DUMMY_PNG\"}}"
+
+            TEST_RES=$(curl -s -X POST "https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}/runsync" \
+              -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
+              -H "Content-Type: application/json" \
+              -d "$SMOKE_PAYLOAD" || true)
+
+            echo "Smoke test response: $TEST_RES"
+
+            if echo "$TEST_RES" | grep -q '"status":\s*"COMPLETED"'; then
+              echo "Smoke test passed successfully!"
+            else
+              echo "::warning ::Smoke test did not return COMPLETED immediately (may still be in cold start/queue). Check Runpod dashboard."
+            fi
+          fi
