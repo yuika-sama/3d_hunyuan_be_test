@@ -8,6 +8,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     OLLAMA_MODELS=/root/.ollama/models \
     TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0+PTX" \
     FORCE_CUDA="1" \
+    HF_HUB_DISABLE_XET="1" \
+    HF_HUB_ENABLE_HF_TRANSFER="0" \
     PYTHONPATH="/app:/app/3dgen/Hunyuan3D-2-main"
 
 # Install Python 3.10 and necessary system packages

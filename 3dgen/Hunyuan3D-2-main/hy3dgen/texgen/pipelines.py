@@ -65,20 +65,26 @@ class Hunyuan3DPaintPipeline:
             if not os.path.exists(delight_model_path) or not os.path.exists(multiview_model_path):
                 try:
                     import huggingface_hub
+                    os.environ["HF_HUB_DISABLE_XET"] = "1"
+                    os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
                     # download from huggingface
                     model_path = huggingface_hub.snapshot_download(
-                        repo_id=original_model_path, allow_patterns=["hunyuan3d-delight-v2-0/*"]
+                        repo_id=original_model_path,
+                        allow_patterns=["hunyuan3d-delight-v2-0/*"],
+                        max_workers=2,
                     )
                     model_path = huggingface_hub.snapshot_download(
-                        repo_id=original_model_path, allow_patterns=[f'{subfolder}/*']
+                        repo_id=original_model_path,
+                        allow_patterns=[f'{subfolder}/*'],
+                        max_workers=2,
                     )
                     delight_model_path = os.path.join(model_path, 'hunyuan3d-delight-v2-0')
                     multiview_model_path = os.path.join(model_path, subfolder)
                     return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder))
-                except Exception:
+                except Exception as e:
                     import traceback
                     traceback.print_exc()
-                    raise RuntimeError(f"Something wrong while loading {model_path}")
+                    raise RuntimeError(f"Something wrong while loading {model_path}: {e}")
             else:
                 return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder))
         else:

@@ -37,6 +37,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("runpod_handler")
 
+# Hugging Face download configuration
+os.environ["HF_HUB_DISABLE_XET"] = "1"
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"
+
 # Constants & Configuration
 OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL_NAME = os.getenv("OLLAMA_MODEL_NAME", "llava:7b")
@@ -690,4 +695,4 @@ def handler(job: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
 
 if __name__ == "__main__":
     logger.info("Starting Runpod Serverless Worker...")
-    runpod.serverless.start({"handler": handler, "return_aggregate_stream": True})
+    runpod.serverless.start({"handler": handler})
