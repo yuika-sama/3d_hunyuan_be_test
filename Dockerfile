@@ -71,7 +71,11 @@ RUN pip3 install --no-cache-dir -e /app/3dgen/Hunyuan3D-2-main && \
 # Copy application files
 COPY runpod_handler.py /app/runpod_handler.py
 COPY test_handler.py /app/test_handler.py
+COPY preload_models.py /app/preload_models.py
 COPY start.sh /app/start.sh
+
+# Pre-download rembg and Hunyuan3D shape model into Docker image layer
+RUN python3 /app/preload_models.py
 
 RUN chmod +x /app/start.sh
 

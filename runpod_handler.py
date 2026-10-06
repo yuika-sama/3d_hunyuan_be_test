@@ -7,13 +7,19 @@ Supports 4 actions:
 4. generate3d: Hunyuan3D-2 geometry + texture generation (GPU with low-VRAM offloading)
 """
 
+import os
+import sys
+
+# Hugging Face download configuration (must be set before any HF / transformers / diffusers imports)
+os.environ["HF_HUB_DISABLE_XET"] = "1"
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "600"
+
 import base64
 import gc
 import hashlib
 import io
 import logging
-import os
-import sys
 import time
 import traceback
 from typing import Any, Dict, Generator, Optional, Tuple
@@ -36,11 +42,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger("runpod_handler")
-
-# Hugging Face download configuration
-os.environ["HF_HUB_DISABLE_XET"] = "1"
-os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
-os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"
 
 # Constants & Configuration
 OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://127.0.0.1:11434")
@@ -176,19 +177,22 @@ class ModelManager:
             logger.info("BLIP model loaded successfully on CPU.")
         return self.blip_processor, self.blip_model
 
-    def load_hunyuan(self):
-        """Lazy load Hunyuan3D pipeline with CPU offloading."""
+    def load_shape_pipeline(self):
+        """Lazy load rembg and shape pipeline with CPU offloading."""
         if self.hunyuan_worker is None:
-            logger.info("Loading Hunyuan3D pipelines...")
+            self.hunyuan_worker = {}
+
+        if "rembg" not in self.hunyuan_worker or self.hunyuan_worker["rembg"] is None:
+            logger.info("Loading BackgroundRemover (rembg)...")
             from hy3dgen.rembg import BackgroundRemover
-            from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
-            from hy3dgen.texgen import Hunyuan3DPaintPipeline
+            self.hunyuan_worker["rembg"] = BackgroundRemover()
 
-            rembg = BackgroundRemover()
-
+        if "shape_pipeline" not in self.hunyuan_worker or self.hunyuan_worker["shape_pipeline"] is None:
             logger.info(
                 f"Loading shape model {HUNYUAN_SHAPE_MODEL} (subfolder: {HUNYUAN_SHAPE_SUBFOLDER})..."
             )
+            from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
+
             shape_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
                 HUNYUAN_SHAPE_MODEL,
                 subfolder=HUNYUAN_SHAPE_SUBFOLDER,
@@ -199,26 +203,63 @@ class ModelManager:
                 shape_pipeline.enable_flashvdm(mc_algo="mc")
             except Exception as e:
                 logger.warning(f"Could not enable flashvdm: {e}")
+            self.hunyuan_worker["shape_pipeline"] = shape_pipeline
 
+        clean_vram()
+        return self.hunyuan_worker["rembg"], self.hunyuan_worker["shape_pipeline"]
+
+    @staticmethod
+    def offload_tex_pipeline(tex_pipeline):
+        """Offload Hunyuan3DPaintPipeline sub-models to CPU and clean VRAM."""
+        if tex_pipeline is not None and hasattr(tex_pipeline, "models"):
+            for model_name, model_obj in tex_pipeline.models.items():
+                if hasattr(model_obj, "pipeline") and model_obj.pipeline is not None:
+                    try:
+                        model_obj.pipeline.to("cpu")
+                    except Exception as e:
+                        logger.warning(f"Failed to offload {model_name} to CPU: {e}")
+        clean_vram()
+
+    @staticmethod
+    def move_tex_pipeline(tex_pipeline, device: str):
+        """Move Hunyuan3DPaintPipeline sub-models to target device."""
+        if tex_pipeline is not None and hasattr(tex_pipeline, "models"):
+            for model_name, model_obj in tex_pipeline.models.items():
+                if hasattr(model_obj, "pipeline") and model_obj.pipeline is not None:
+                    try:
+                        model_obj.pipeline.to(device)
+                    except Exception as e:
+                        logger.warning(f"Failed to move {model_name} to {device}: {e}")
+
+    def load_tex_pipeline(self):
+        """Lazy load texture pipeline with CPU offloading."""
+        if self.hunyuan_worker is None:
+            self.hunyuan_worker = {}
+
+        if "tex_pipeline" not in self.hunyuan_worker or self.hunyuan_worker["tex_pipeline"] is None:
             logger.info(f"Loading texture model {HUNYUAN_TEX_MODEL}...")
-            tex_pipeline = Hunyuan3DPaintPipeline.from_pretrained(HUNYUAN_TEX_MODEL)
+            from hy3dgen.texgen import Hunyuan3DPaintPipeline
 
-            # Offload texture pipeline parts to CPU
-            if hasattr(tex_pipeline, "unet") and tex_pipeline.unet is not None:
-                tex_pipeline.unet.to("cpu")
-            if hasattr(tex_pipeline, "vae") and tex_pipeline.vae is not None:
-                tex_pipeline.vae.to("cpu")
-            if hasattr(tex_pipeline, "text_encoder") and tex_pipeline.text_encoder is not None:
-                tex_pipeline.text_encoder.to("cpu")
+            try:
+                tex_pipeline = Hunyuan3DPaintPipeline.from_pretrained(HUNYUAN_TEX_MODEL)
+                self.offload_tex_pipeline(tex_pipeline)
+                self.hunyuan_worker["tex_pipeline"] = tex_pipeline
+                logger.info("Texture pipeline loaded and offloaded to CPU.")
+            except Exception as e:
+                logger.error(f"Failed to load texture model: {e}")
+                self.hunyuan_worker["tex_pipeline"] = None
 
-            clean_vram()
-            self.hunyuan_worker = {
-                "rembg": rembg,
-                "shape_pipeline": shape_pipeline,
-                "tex_pipeline": tex_pipeline,
-            }
-            logger.info("Hunyuan3D pipelines initialized and offloaded to CPU.")
-        return self.hunyuan_worker
+        return self.hunyuan_worker.get("tex_pipeline")
+
+    def load_hunyuan(self, load_texture: bool = True):
+        """Load Hunyuan3D pipelines with CPU offloading."""
+        rembg, shape_pipeline = self.load_shape_pipeline()
+        tex_pipeline = self.load_tex_pipeline() if load_texture else None
+        return {
+            "rembg": rembg,
+            "shape_pipeline": shape_pipeline,
+            "tex_pipeline": tex_pipeline,
+        }
 
     @staticmethod
     def unload_ollama(model_name: str = OLLAMA_MODEL_NAME):
@@ -489,10 +530,10 @@ def handle_generate3d(
         "vram": get_vram_info(),
     }
 
-    hunyuan = model_manager.load_hunyuan()
+    hunyuan = model_manager.load_hunyuan(load_texture=enable_texture)
     rembg = hunyuan["rembg"]
     shape_pipeline = hunyuan["shape_pipeline"]
-    tex_pipeline = hunyuan["tex_pipeline"]
+    tex_pipeline = hunyuan.get("tex_pipeline")
 
     # 1. Preprocess & background removal
     yield {
@@ -551,42 +592,38 @@ def handle_generate3d(
     # 4. Texture generation
     tex_ms = 0
     if enable_texture:
-        yield {
-            "type": "progress",
-            "stage": "texture_generation",
-            "elapsed_ms": int((time.time() - start_time) * 1000),
-            "vram": get_vram_info(),
-        }
-        t_tex_start = time.time()
-        try:
-            if hasattr(tex_pipeline, "unet") and tex_pipeline.unet is not None:
-                tex_pipeline.unet.to(device)
-            if hasattr(tex_pipeline, "vae") and tex_pipeline.vae is not None:
-                tex_pipeline.vae.to(device)
-            if (
-                hasattr(tex_pipeline, "text_encoder")
-                and tex_pipeline.text_encoder is not None
-            ):
-                tex_pipeline.text_encoder.to(device)
+        if tex_pipeline is None:
+            yield {
+                "type": "progress",
+                "stage": "loading_texture_pipeline",
+                "elapsed_ms": int((time.time() - start_time) * 1000),
+                "vram": get_vram_info(),
+            }
+            tex_pipeline = model_manager.load_tex_pipeline()
 
-            mesh = tex_pipeline(mesh, image_no_bg)
-        except Exception as e:
+        if tex_pipeline is not None:
+            yield {
+                "type": "progress",
+                "stage": "texture_generation",
+                "elapsed_ms": int((time.time() - start_time) * 1000),
+                "vram": get_vram_info(),
+            }
+            t_tex_start = time.time()
+            try:
+                model_manager.move_tex_pipeline(tex_pipeline, device)
+                mesh = tex_pipeline(mesh, image_no_bg)
+            except Exception as e:
+                logger.warning(
+                    f"Texture generation encountered an error: {e}. Falling back to untextured mesh."
+                )
+            finally:
+                model_manager.offload_tex_pipeline(tex_pipeline)
+                clean_vram()
+            tex_ms = int((time.time() - t_tex_start) * 1000)
+        else:
             logger.warning(
-                f"Texture generation encountered an error: {e}. Falling back to untextured mesh."
+                "Texture pipeline unavailable. Falling back to untextured mesh."
             )
-        finally:
-            if hasattr(tex_pipeline, "unet") and tex_pipeline.unet is not None:
-                tex_pipeline.unet.to("cpu")
-            if hasattr(tex_pipeline, "vae") and tex_pipeline.vae is not None:
-                tex_pipeline.vae.to("cpu")
-            if (
-                hasattr(tex_pipeline, "text_encoder")
-                and tex_pipeline.text_encoder is not None
-            ):
-                tex_pipeline.text_encoder.to("cpu")
-            clean_vram()
-
-        tex_ms = int((time.time() - t_tex_start) * 1000)
 
     # 5. GLB Export
     yield {

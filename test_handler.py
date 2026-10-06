@@ -243,6 +243,58 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertIn("timings", done_event)
         self.assertIn("total_ms", done_event["timings"])
 
+    @patch.object(runpod_handler.model_manager, "load_hunyuan")
+    @patch.object(runpod_handler.model_manager, "move_tex_pipeline")
+    @patch.object(runpod_handler.model_manager, "offload_tex_pipeline")
+    def test_handler_generate3d_with_texture_success(
+        self, mock_offload, mock_move, mock_load_hunyuan
+    ):
+        """Test generate3d action with texture=True, verifying texture stage and offloading."""
+        fake_glb_bytes = b"GLB_TEXTURED_DATA" * 1000
+        mock_mesh = MagicMock()
+        mock_mesh.export.side_effect = lambda f, file_type: f.write(fake_glb_bytes)
+
+        mock_rembg = MagicMock(return_value=Image.new("RGB", (64, 64)))
+        mock_shape_pipe = MagicMock()
+        mock_shape_pipe.return_value = [mock_mesh]
+        mock_tex_pipe = MagicMock()
+        mock_tex_pipe.return_value = mock_mesh
+
+        mock_load_hunyuan.return_value = {
+            "rembg": mock_rembg,
+            "shape_pipeline": mock_shape_pipe,
+            "tex_pipeline": mock_tex_pipe,
+        }
+
+        mock_shapegen = MagicMock()
+        mock_shapegen.FloaterRemover = MagicMock(return_value=lambda m: m)
+        mock_shapegen.DegenerateFaceRemover = MagicMock(return_value=lambda m: m)
+        mock_shapegen.FaceReducer = MagicMock(return_value=lambda m, max_facenum: m)
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "hy3dgen": MagicMock(),
+                "hy3dgen.shapegen": mock_shapegen,
+                "hy3dgen.rembg": MagicMock(),
+                "hy3dgen.texgen": MagicMock(),
+            },
+        ):
+            job = {
+                "input": {
+                    "action": "generate3d",
+                    "image_base64": self.dummy_b64,
+                    "texture": True,
+                }
+            }
+            events = list(handler(job))
+
+        stages = [e["stage"] for e in events if e.get("type") == "progress"]
+        self.assertIn("texture_generation", stages)
+        mock_move.assert_called_once()
+        mock_offload.assert_called_once()
+        mock_tex_pipe.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

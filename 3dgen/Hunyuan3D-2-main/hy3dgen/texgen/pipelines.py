@@ -67,15 +67,31 @@ class Hunyuan3DPaintPipeline:
                     import huggingface_hub
                     os.environ["HF_HUB_DISABLE_XET"] = "1"
                     os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+                    ignore_patterns = ["*.ckpt", "*.bin", "*.pt", "*.onnx"]
                     # download from huggingface
                     model_path = huggingface_hub.snapshot_download(
                         repo_id=original_model_path,
-                        allow_patterns=["hunyuan3d-delight-v2-0/*"],
+                        allow_patterns=[
+                            "hunyuan3d-delight-v2-0/*.json",
+                            "hunyuan3d-delight-v2-0/*.txt",
+                            "hunyuan3d-delight-v2-0/*/*.json",
+                            "hunyuan3d-delight-v2-0/*/*.txt",
+                            "hunyuan3d-delight-v2-0/*/*.safetensors",
+                        ],
+                        ignore_patterns=ignore_patterns,
                         max_workers=2,
                     )
                     model_path = huggingface_hub.snapshot_download(
                         repo_id=original_model_path,
-                        allow_patterns=[f'{subfolder}/*'],
+                        allow_patterns=[
+                            f"{subfolder}/*.json",
+                            f"{subfolder}/*.txt",
+                            f"{subfolder}/*.py",
+                            f"{subfolder}/*/*.json",
+                            f"{subfolder}/*/*.txt",
+                            f"{subfolder}/*/*.safetensors",
+                        ],
+                        ignore_patterns=ignore_patterns,
                         max_workers=2,
                     )
                     delight_model_path = os.path.join(model_path, 'hunyuan3d-delight-v2-0')
