@@ -295,6 +295,95 @@ class TestRunpodHandler(unittest.TestCase):
         mock_offload.assert_called_once()
         mock_tex_pipe.assert_called_once()
 
+    @patch.object(runpod_handler.model_manager, "load_hunyuan")
+    def test_handler_generate3d_fallback_on_flashvdm_empty_mesh(
+        self, mock_load_hunyuan
+    ):
+        """Test that if FlashVDM returns None or empty mesh, fallback activates and succeeds."""
+        fake_glb_bytes = b"FALLBACK_GLB_DATA" * 500
+        mock_mesh = MagicMock()
+        mock_mesh.export.side_effect = lambda f, file_type: f.write(fake_glb_bytes)
+
+        mock_rembg = MagicMock(return_value=Image.new("RGB", (64, 64)))
+        mock_shape_pipe = MagicMock()
+        # First call (FlashVDM) returns [None], second call (fallback) returns [mock_mesh]
+        mock_shape_pipe.side_effect = [[None], [mock_mesh]]
+
+        mock_load_hunyuan.return_value = {
+            "rembg": mock_rembg,
+            "shape_pipeline": mock_shape_pipe,
+            "tex_pipeline": None,
+        }
+
+        mock_shapegen = MagicMock()
+        mock_shapegen.FloaterRemover = MagicMock(return_value=lambda m: m)
+        mock_shapegen.DegenerateFaceRemover = MagicMock(return_value=lambda m: m)
+        mock_shapegen.FaceReducer = MagicMock(return_value=lambda m, max_facenum: m)
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "hy3dgen": MagicMock(),
+                "hy3dgen.shapegen": mock_shapegen,
+                "hy3dgen.rembg": MagicMock(),
+                "hy3dgen.texgen": MagicMock(),
+            },
+        ):
+            job = {
+                "input": {
+                    "action": "generate3d",
+                    "image_base64": self.dummy_b64,
+                    "texture": False,
+                }
+            }
+            events = list(handler(job))
+
+        mock_shape_pipe.enable_flashvdm.assert_any_call(enabled=False)
+        self.assertEqual(mock_shape_pipe.call_count, 2)
+
+        meta_event = next(e for e in events if e.get("type") == "file_meta")
+        self.assertEqual(meta_event["name"], "model.glb")
+        self.assertEqual(meta_event["size"], len(fake_glb_bytes))
+
+    @patch.object(runpod_handler.model_manager, "load_hunyuan")
+    def test_handler_generate3d_complete_failure_yields_error_event(
+        self, mock_load_hunyuan
+    ):
+        """Test that if both FlashVDM and fallback fail, an error event is yielded."""
+        mock_rembg = MagicMock(return_value=Image.new("RGB", (64, 64)))
+        mock_shape_pipe = MagicMock()
+        mock_shape_pipe.side_effect = [[None], [None]]
+
+        mock_load_hunyuan.return_value = {
+            "rembg": mock_rembg,
+            "shape_pipeline": mock_shape_pipe,
+            "tex_pipeline": None,
+        }
+
+        mock_shapegen = MagicMock()
+        with patch.dict(
+            "sys.modules",
+            {
+                "hy3dgen": MagicMock(),
+                "hy3dgen.shapegen": mock_shapegen,
+                "hy3dgen.rembg": MagicMock(),
+                "hy3dgen.texgen": MagicMock(),
+            },
+        ):
+            job = {
+                "input": {
+                    "action": "generate3d",
+                    "image_base64": self.dummy_b64,
+                    "texture": False,
+                }
+            }
+            events = list(handler(job))
+
+        error_events = [e for e in events if e.get("type") == "error"]
+        self.assertEqual(len(error_events), 1)
+        self.assertEqual(error_events[0]["stage"], "execution")
+        self.assertIn("Hunyuan3D shape generation returned empty mesh", error_events[0]["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

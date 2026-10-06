@@ -66,11 +66,58 @@ class SurfaceExtractor:
 
 class MCSurfaceExtractor(SurfaceExtractor):
     def run(self, grid_logit, *, mc_level, bounds, octree_resolution, **kwargs):
-        vertices, faces, normals, _ = measure.marching_cubes(
-            grid_logit.cpu().numpy(),
-            mc_level,
-            method="lewiner"
-        )
+        grid_np = grid_logit.cpu().numpy().astype(np.float32)
+        has_nan = np.isnan(grid_np).any()
+        if has_nan:
+            grid_clean = np.nan_to_num(grid_np, nan=-10.0)
+            mask = ~np.isnan(grid_np)
+        else:
+            grid_clean = grid_np
+            mask = None
+
+        levels_to_try = [mc_level]
+        for alt_level in [0.0, -1.0 / 512.0]:
+            if alt_level not in levels_to_try:
+                levels_to_try.append(alt_level)
+
+        valid_vals = grid_clean[mask] if (mask is not None and mask.any()) else grid_clean.ravel()
+        if len(valid_vals) > 0:
+            vmin = float(np.min(valid_vals))
+            vmax = float(np.max(valid_vals))
+            if vmin < vmax:
+                mid = (vmin + vmax) / 2.0
+                if mid not in levels_to_try:
+                    levels_to_try.append(mid)
+                med = float(np.median(valid_vals))
+                if med not in levels_to_try:
+                    levels_to_try.append(med)
+
+        last_err = None
+        vertices, faces = None, None
+
+        for lvl in levels_to_try:
+            if mask is not None:
+                try:
+                    verts, fcs, _, _ = measure.marching_cubes(grid_clean, lvl, method="lewiner", mask=mask)
+                    if len(verts) > 0 and len(fcs) > 0:
+                        vertices, faces = verts, fcs
+                        break
+                except Exception as e:
+                    last_err = e
+
+            try:
+                verts, fcs, _, _ = measure.marching_cubes(grid_clean, lvl, method="lewiner")
+                if len(verts) > 0 and len(fcs) > 0:
+                    vertices, faces = verts, fcs
+                    break
+            except Exception as e:
+                last_err = e
+
+        if vertices is None or faces is None:
+            if last_err is not None:
+                raise last_err
+            raise RuntimeError(f"No surface found at any iso value tested: {levels_to_try}")
+
         grid_size, bbox_min, bbox_size = self._compute_box_stat(bounds, octree_resolution)
         vertices = vertices / grid_size * bbox_size + bbox_min
         return vertices, faces

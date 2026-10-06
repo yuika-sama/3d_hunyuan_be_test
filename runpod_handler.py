@@ -26,6 +26,7 @@ from typing import Any, Dict, Generator, Optional, Tuple
 
 from PIL import Image
 import httpx
+import numpy as np
 import runpod
 import torch
 
@@ -200,7 +201,8 @@ class ModelManager:
                 device="cpu",
             )
             try:
-                shape_pipeline.enable_flashvdm(mc_algo="mc")
+                topk = "merge" if "mini" in HUNYUAN_SHAPE_MODEL.lower() else "mean"
+                shape_pipeline.enable_flashvdm(topk_mode=topk, mc_algo="mc")
             except Exception as e:
                 logger.warning(f"Could not enable flashvdm: {e}")
             self.hunyuan_worker["shape_pipeline"] = shape_pipeline
@@ -557,24 +559,70 @@ def handle_generate3d(
     logger.info(f"Offloading shape pipeline to {device}...")
     shape_pipeline.to(device)
 
+    mesh = None
     try:
         generator = torch.Generator("cpu").manual_seed(seed)
-        mesh = shape_pipeline(
+        outputs = shape_pipeline(
             image=image_no_bg,
             generator=generator,
             octree_resolution=octree_res,
             num_inference_steps=steps,
             guidance_scale=guidance,
             mc_algo="mc",
-        )[0]
-    finally:
-        logger.info("Offloading shape pipeline back to CPU...")
-        shape_pipeline.to("cpu")
-        clean_vram()
+        )
+        if outputs and len(outputs) > 0:
+            mesh = outputs[0]
+    except Exception as e:
+        logger.warning(f"Shape generation with FlashVDM encountered an error: {e}")
+
+    def _is_mesh_valid(m) -> bool:
+        if m is None:
+            return False
+        if hasattr(m, "vertices"):
+            v = getattr(m, "vertices")
+            if isinstance(v, (list, tuple, np.ndarray)) and len(v) == 0:
+                return False
+        if hasattr(m, "faces"):
+            f = getattr(m, "faces")
+            if isinstance(f, (list, tuple, np.ndarray)) and len(f) == 0:
+                return False
+        return True
+
+    # Fallback to standard volume decoding if FlashVDM produced empty mesh or failed
+    if not _is_mesh_valid(mesh):
+        logger.warning(
+            "FlashVDM generated empty mesh or failed. Falling back to standard volume decoder..."
+        )
+        try:
+            shape_pipeline.enable_flashvdm(enabled=False)
+            shape_pipeline.to(device)
+            generator = torch.Generator("cpu").manual_seed(seed)
+            outputs = shape_pipeline(
+                image=image_no_bg,
+                generator=generator,
+                octree_resolution=octree_res,
+                num_inference_steps=steps,
+                guidance_scale=guidance,
+                mc_algo="mc",
+            )
+            if outputs and len(outputs) > 0:
+                mesh = outputs[0]
+        except Exception as e2:
+            logger.error(f"Fallback shape generation also failed: {e2}")
+        finally:
+            try:
+                topk = "merge" if "mini" in HUNYUAN_SHAPE_MODEL.lower() else "mean"
+                shape_pipeline.enable_flashvdm(topk_mode=topk, mc_algo="mc")
+            except Exception:
+                pass
+
+    logger.info("Offloading shape pipeline back to CPU...")
+    shape_pipeline.to("cpu")
+    clean_vram()
 
     shape_ms = int((time.time() - t_shape_start) * 1000)
 
-    if mesh is None:
+    if not _is_mesh_valid(mesh):
         raise RuntimeError("Hunyuan3D shape generation returned empty mesh.")
 
     # 3. Mesh cleanup and reduction
@@ -584,9 +632,14 @@ def handle_generate3d(
         "elapsed_ms": int((time.time() - start_time) * 1000),
     }
     t_clean_start = time.time()
-    mesh = FloaterRemover()(mesh)
-    mesh = DegenerateFaceRemover()(mesh)
-    mesh = FaceReducer()(mesh, max_facenum=face_count)
+    try:
+        mesh = FloaterRemover()(mesh)
+        mesh = DegenerateFaceRemover()(mesh)
+        mesh = FaceReducer()(mesh, max_facenum=face_count)
+    except Exception as e:
+        logger.warning(
+            f"Mesh post-processing encountered an error: {e}. Keeping existing mesh."
+        )
     clean_ms = int((time.time() - t_clean_start) * 1000)
 
     # 4. Texture generation
