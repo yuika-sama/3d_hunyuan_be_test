@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ninja-build \
     procps \
     ca-certificates \
+    zstd \
     && rm -rf /var/lib/apt/lists/* \
     && rm -rf /usr/local/cuda/targets/x86_64-linux/lib/*_static.a || true
 
@@ -42,7 +43,7 @@ RUN curl -fsSL https://ollama.com/install.sh | sh
 # Pre-download LLaVA 7B model into Docker image layer
 RUN ollama serve & \
     PID=$! && \
-    sleep 5 && \
+    for i in $(seq 1 30); do curl -s http://127.0.0.1:11434/api/tags > /dev/null 2>&1 && break || sleep 1; done && \
     ollama pull llava:7b && \
     kill $PID && \
     wait $PID || true
