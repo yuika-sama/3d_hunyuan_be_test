@@ -1,5 +1,5 @@
 # Dockerfile for Runpod Serverless Unified Worker (CUDA 12.1 + PyTorch + Ollama LLaVA + Hunyuan3D)
-FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-devel
+FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -10,8 +10,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     FORCE_CUDA="1" \
     PYTHONPATH="/app:/app/3dgen/Hunyuan3D-2-main"
 
-# Install system dependencies
+# Install Python 3.10 and necessary system packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3.10-dev \
+    python3-pip \
     git \
     curl \
     wget \
@@ -22,7 +25,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ninja-build \
     procps \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/local/cuda/targets/x86_64-linux/lib/*_static.a || true
+
+# Set python3 alias
+RUN ln -sf /usr/bin/python3.10 /usr/bin/python && \
+    ln -sf /usr/bin/python3.10 /usr/bin/python3
+
+# Install PyTorch with CUDA 12.1
+RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip3 install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121
 
 # Install Ollama CLI and daemon
 RUN curl -fsSL https://ollama.com/install.sh | sh
@@ -39,17 +51,16 @@ WORKDIR /app
 
 # Copy dependency definitions and install Python packages
 COPY requirements-runpod.txt /app/requirements-runpod.txt
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -r /app/requirements-runpod.txt
+RUN pip3 install --no-cache-dir -r /app/requirements-runpod.txt
 
 # Copy Hunyuan3D-2 codebase and compile C++/CUDA native rasterizers
 COPY 3dgen/Hunyuan3D-2-main /app/3dgen/Hunyuan3D-2-main
 
-RUN pip install --no-cache-dir -e /app/3dgen/Hunyuan3D-2-main && \
+RUN pip3 install --no-cache-dir -e /app/3dgen/Hunyuan3D-2-main && \
     cd /app/3dgen/Hunyuan3D-2-main/hy3dgen/texgen/custom_rasterizer && \
-    python setup.py install && \
+    python3 setup.py install && \
     cd /app/3dgen/Hunyuan3D-2-main/hy3dgen/texgen/differentiable_renderer && \
-    python setup.py install
+    python3 setup.py install
 
 # Copy application files
 COPY runpod_handler.py /app/runpod_handler.py
