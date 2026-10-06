@@ -20,7 +20,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     ffmpeg \
     libgl1 \
+    libgl1-mesa-glx \
     libglib2.0-0 \
+    libopengl0 \
+    libegl1 \
     build-essential \
     ninja-build \
     procps \

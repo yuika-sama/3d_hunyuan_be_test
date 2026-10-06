@@ -178,7 +178,10 @@ class Hunyuan3DDiTPipeline:
         vae.load_state_dict(ckpt['vae'], strict=False)
         conditioner = instantiate_from_config(config['conditioner'])
         if 'conditioner' in ckpt:
-            conditioner.load_state_dict(ckpt['conditioner'])
+            try:
+                conditioner.load_state_dict(ckpt['conditioner'])
+            except Exception:
+                conditioner.load_state_dict(ckpt['conditioner'], strict=False)
         image_processor = instantiate_from_config(config['image_processor'])
         scheduler = instantiate_from_config(config['scheduler'])
 
