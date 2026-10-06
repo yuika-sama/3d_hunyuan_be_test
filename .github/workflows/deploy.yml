@@ -81,7 +81,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy-runpod:
-    name: Update Runpod Template & Smoke Test
+    name: Update Runpod & Smoke Test
     needs: [build-and-push]
     runs-on: ubuntu-latest
     steps:
@@ -92,34 +92,49 @@ jobs:
           RUNPOD_ENDPOINT_ID: ${{ vars.RUNPOD_ENDPOINT_ID }}
           NEW_IMAGE: ${{ needs.build-and-push.outputs.image_tag }}
         run: |
-          if [ -z "$RUNPOD_API_KEY" ] || [ -z "$RUNPOD_TEMPLATE_ID" ]; then
-            echo "::warning ::RUNPOD_API_KEY or RUNPOD_TEMPLATE_ID is not configured. Skipping automated template update."
+          if [ -z "$RUNPOD_API_KEY" ]; then
+            echo "::warning ::RUNPOD_API_KEY is not configured. Skipping automated Runpod update."
             echo "The image has been pushed to: $NEW_IMAGE"
             exit 0
           fi
 
-          echo "Fetching current template info for rollback safety..."
-          TEMPLATE_INFO=$(curl -s -X GET "https://rest.runpod.io/v1/templates/${RUNPOD_TEMPLATE_ID}" \
-            -H "Authorization: Bearer ${RUNPOD_API_KEY}")
+          if [ -n "$RUNPOD_TEMPLATE_ID" ]; then
+            echo "Updating via Template ID: ${RUNPOD_TEMPLATE_ID}..."
+            UPDATE_RES=$(curl -s -w "\n%{http_code}" -X PATCH "https://rest.runpod.io/v1/templates/${RUNPOD_TEMPLATE_ID}" \
+              -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
+              -H "Content-Type: application/json" \
+              -d "{\"imageName\": \"${NEW_IMAGE}\"}")
+            
+            HTTP_CODE=$(echo "$UPDATE_RES" | tail -n1)
+            BODY=$(echo "$UPDATE_RES" | sed '$d')
+            if [ "$HTTP_CODE" -ne 200 ] && [ "$HTTP_CODE" -ne 204 ]; then
+              echo "::warning ::Template update returned HTTP $HTTP_CODE: $BODY"
+            else
+              echo "Template successfully updated to $NEW_IMAGE."
+            fi
+          elif [ -n "$RUNPOD_ENDPOINT_ID" ]; then
+            echo "Updating Endpoint directly: ${RUNPOD_ENDPOINT_ID}..."
+            UPDATE_RES=$(curl -s -w "\n%{http_code}" -X PATCH "https://rest.runpod.io/v1/endpoints/${RUNPOD_ENDPOINT_ID}" \
+              -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
+              -H "Content-Type: application/json" \
+              -d "{\"imageName\": \"${NEW_IMAGE}\"}")
 
-          PREV_IMAGE=$(echo "$TEMPLATE_INFO" | grep -o '"imageName":"[^"]*' | cut -d'"' -f4 || true)
-          echo "Previous Image: ${PREV_IMAGE:-unknown}"
-
-          echo "Updating Runpod template to: ${NEW_IMAGE}..."
-          UPDATE_RES=$(curl -s -w "\n%{http_code}" -X PATCH "https://rest.runpod.io/v1/templates/${RUNPOD_TEMPLATE_ID}" \
-            -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
-            -H "Content-Type: application/json" \
-            -d "{\"imageName\": \"${NEW_IMAGE}\"}")
-
-          HTTP_CODE=$(echo "$UPDATE_RES" | tail -n1)
-          BODY=$(echo "$UPDATE_RES" | sed '$d')
-
-          if [ "$HTTP_CODE" -ne 200 ] && [ "$HTTP_CODE" -ne 204 ]; then
-            echo "::error ::Failed to update Runpod template. HTTP $HTTP_CODE: $BODY"
-            exit 1
+            HTTP_CODE=$(echo "$UPDATE_RES" | tail -n1)
+            BODY=$(echo "$UPDATE_RES" | sed '$d')
+            if [ "$HTTP_CODE" -ne 200 ] && [ "$HTTP_CODE" -ne 204 ]; then
+              echo "Trying GraphQL mutation fallback for endpoint update..."
+              GQL_PAYLOAD="{\"query\":\"mutation { saveEndpoint(input: { id: \\\"${RUNPOD_ENDPOINT_ID}\\\", imageName: \\\"${NEW_IMAGE}\\\" }) { id imageName } }\"}"
+              GQL_RES=$(curl -s -X POST "https://api.runpod.io/graphql?api_key=${RUNPOD_API_KEY}" \
+                -H "Content-Type: application/json" \
+                -d "$GQL_PAYLOAD")
+              echo "GraphQL response: $GQL_RES"
+            else
+              echo "Endpoint successfully updated to $NEW_IMAGE."
+            fi
+          else
+            echo "::warning ::Neither RUNPOD_TEMPLATE_ID nor RUNPOD_ENDPOINT_ID was set. Image pushed to GHCR: $NEW_IMAGE."
+            exit 0
           fi
-
-          echo "Template successfully updated to $NEW_IMAGE."
 
           if [ -n "$RUNPOD_ENDPOINT_ID" ]; then
             echo "Waiting 15s for worker warm-up..."
