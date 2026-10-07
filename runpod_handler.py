@@ -26,9 +26,13 @@ from typing import Any, Dict, Generator, Optional, Tuple
 
 from PIL import Image
 import httpx
-import numpy as np
 import runpod
 import torch
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 # Ensure hy3dgen in subfolder can be imported if not installed in site-packages
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -580,12 +584,14 @@ def handle_generate3d(
             return False
         if hasattr(m, "vertices"):
             v = getattr(m, "vertices")
-            if isinstance(v, (list, tuple, np.ndarray)) and len(v) == 0:
-                return False
+            if type(v).__name__ in ("ndarray", "list", "tuple", "Tensor"):
+                if len(v) == 0:
+                    return False
         if hasattr(m, "faces"):
             f = getattr(m, "faces")
-            if isinstance(f, (list, tuple, np.ndarray)) and len(f) == 0:
-                return False
+            if type(f).__name__ in ("ndarray", "list", "tuple", "Tensor"):
+                if len(f) == 0:
+                    return False
         return True
 
     # Fallback to standard volume decoding if FlashVDM produced empty mesh or failed
