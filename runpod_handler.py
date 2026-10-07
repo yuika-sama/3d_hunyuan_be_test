@@ -40,6 +40,16 @@ if not hasattr(torch, "accelerator"):
     torch.accelerator = _acc_mod
 
 try:
+    import transformers
+    for _cls_name in ["Dinov2WithRegistersConfig", "Dinov2WithRegistersModel", "Dinov2WithRegistersPreTrainedModel"]:
+        if not hasattr(transformers, _cls_name):
+            class _DummyTransformerClass:
+                pass
+            setattr(transformers, _cls_name, _DummyTransformerClass)
+except Exception:
+    pass
+
+try:
     import numpy as np
 except ImportError:
     np = None

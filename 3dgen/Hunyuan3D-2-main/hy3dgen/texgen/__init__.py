@@ -13,4 +13,24 @@
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
 
+import types
+import torch
+
+if not hasattr(torch, "accelerator"):
+    _acc_mod = types.ModuleType("accelerator")
+    _acc_mod.current_accelerator = lambda: torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    _acc_mod.is_available = lambda: torch.cuda.is_available()
+    _acc_mod.device_count = lambda: torch.cuda.device_count() if torch.cuda.is_available() else 0
+    torch.accelerator = _acc_mod
+
+try:
+    import transformers
+    for _cls_name in ["Dinov2WithRegistersConfig", "Dinov2WithRegistersModel", "Dinov2WithRegistersPreTrainedModel"]:
+        if not hasattr(transformers, _cls_name):
+            class _DummyTransformerClass:
+                pass
+            setattr(transformers, _cls_name, _DummyTransformerClass)
+except Exception:
+    pass
+
 from .pipelines import Hunyuan3DPaintPipeline, Hunyuan3DTexGenConfig

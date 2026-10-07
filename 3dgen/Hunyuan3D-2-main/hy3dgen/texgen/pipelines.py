@@ -67,7 +67,12 @@ class Hunyuan3DPaintPipeline:
                     import huggingface_hub
                     os.environ["HF_HUB_DISABLE_XET"] = "1"
                     os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
-                    ignore_patterns = ["*.ckpt", "*.bin", "*.pt", "*.onnx"]
+                    ignore_patterns = [
+                        "*.ckpt",
+                        "*.pt",
+                        "*.onnx",
+                        f"{subfolder}/unet/diffusion_pytorch_model.bin",
+                    ]
                     allow_patterns = [
                         f"{subfolder}/**",
                         "hunyuan3d-delight-v2-0/**",

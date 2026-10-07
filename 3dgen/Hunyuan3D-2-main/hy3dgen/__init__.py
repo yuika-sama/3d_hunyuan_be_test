@@ -23,3 +23,15 @@ if not hasattr(torch, "accelerator"):
     _acc_mod.is_available = lambda: torch.cuda.is_available()
     _acc_mod.device_count = lambda: torch.cuda.device_count() if torch.cuda.is_available() else 0
     torch.accelerator = _acc_mod
+
+# Compatibility shim: Diffusers >= 0.32 autoencoder_rae imports Dinov2WithRegistersConfig
+# which is absent in older transformers.
+try:
+    import transformers
+    for _cls_name in ["Dinov2WithRegistersConfig", "Dinov2WithRegistersModel", "Dinov2WithRegistersPreTrainedModel"]:
+        if not hasattr(transformers, _cls_name):
+            class _DummyTransformerClass:
+                pass
+            setattr(transformers, _cls_name, _DummyTransformerClass)
+except Exception:
+    pass
