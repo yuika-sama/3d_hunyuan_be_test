@@ -227,25 +227,47 @@ class ModelManager:
     @staticmethod
     def offload_tex_pipeline(tex_pipeline):
         """Offload Hunyuan3DPaintPipeline sub-models to CPU and clean VRAM."""
-        if tex_pipeline is not None and hasattr(tex_pipeline, "models"):
-            for model_name, model_obj in tex_pipeline.models.items():
-                if hasattr(model_obj, "pipeline") and model_obj.pipeline is not None:
-                    try:
-                        model_obj.pipeline.to("cpu")
-                    except Exception as e:
-                        logger.warning(f"Failed to offload {model_name} to CPU: {e}")
+        if tex_pipeline is not None:
+            if hasattr(tex_pipeline, "to"):
+                try:
+                    tex_pipeline.to("cpu")
+                except Exception as e:
+                    logger.warning(f"Failed to offload tex_pipeline to CPU: {e}")
+            if hasattr(tex_pipeline, "models"):
+                for model_name, model_obj in tex_pipeline.models.items():
+                    if hasattr(model_obj, "to"):
+                        try:
+                            model_obj.to("cpu")
+                        except Exception as e:
+                            logger.warning(f"Failed to offload {model_name} to CPU: {e}")
+                    elif hasattr(model_obj, "pipeline") and model_obj.pipeline is not None:
+                        try:
+                            model_obj.pipeline.to("cpu")
+                        except Exception as e:
+                            logger.warning(f"Failed to offload {model_name} to CPU: {e}")
         clean_vram()
 
     @staticmethod
     def move_tex_pipeline(tex_pipeline, device: str):
-        """Move Hunyuan3DPaintPipeline sub-models to target device."""
-        if tex_pipeline is not None and hasattr(tex_pipeline, "models"):
-            for model_name, model_obj in tex_pipeline.models.items():
-                if hasattr(model_obj, "pipeline") and model_obj.pipeline is not None:
-                    try:
-                        model_obj.pipeline.to(device)
-                    except Exception as e:
-                        logger.warning(f"Failed to move {model_name} to {device}: {e}")
+        """Move Hunyuan3DPaintPipeline to target device."""
+        if tex_pipeline is not None:
+            if hasattr(tex_pipeline, "to"):
+                try:
+                    tex_pipeline.to(device)
+                except Exception as e:
+                    logger.warning(f"Failed to move tex_pipeline to {device}: {e}")
+            if hasattr(tex_pipeline, "models"):
+                for model_name, model_obj in tex_pipeline.models.items():
+                    if hasattr(model_obj, "to"):
+                        try:
+                            model_obj.to(device)
+                        except Exception as e:
+                            logger.warning(f"Failed to move {model_name} to {device}: {e}")
+                    elif hasattr(model_obj, "pipeline") and model_obj.pipeline is not None:
+                        try:
+                            model_obj.pipeline.to(device)
+                        except Exception as e:
+                            logger.warning(f"Failed to move {model_name} to {device}: {e}")
 
     def load_tex_pipeline(self):
         """Lazy load texture pipeline with CPU offloading."""
@@ -680,10 +702,16 @@ def handle_generate3d(
             t_tex_start = time.time()
             try:
                 model_manager.move_tex_pipeline(tex_pipeline, device)
-                mesh = tex_pipeline(mesh, image_no_bg)
+                textured_mesh = tex_pipeline(mesh, image_no_bg)
+                if textured_mesh is not None:
+                    mesh = textured_mesh
+                    logger.info("Texture generation completed successfully. Textured mesh ready for GLB export.")
+                else:
+                    logger.warning("Texture pipeline returned None. Falling back to untextured mesh.")
             except Exception as e:
-                logger.warning(
-                    f"Texture generation encountered an error: {e}. Falling back to untextured mesh."
+                import traceback
+                logger.error(
+                    f"Texture generation encountered an error: {e}\n{traceback.format_exc()}"
                 )
             finally:
                 model_manager.offload_tex_pipeline(tex_pipeline)

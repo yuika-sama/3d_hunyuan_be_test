@@ -308,7 +308,7 @@ class MeshRender():
 
     def color_rgb_to_srgb(self, image):
         if isinstance(image, Image.Image):
-            image_rgb = torch.tesnor(
+            image_rgb = torch.tensor(
                 np.array(image) /
                 255.0).float().to(
                 self.device)

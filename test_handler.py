@@ -384,6 +384,82 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertEqual(error_events[0]["stage"], "execution")
         self.assertIn("Hunyuan3D shape generation returned empty mesh", error_events[0]["error"])
 
+    @patch.object(runpod_handler.model_manager, "load_hunyuan")
+    def test_handler_generate3d_texture_error_fallback_to_untextured(
+        self, mock_load_hunyuan
+    ):
+        """Test that if texture generation raises an exception, the handler logs error and falls back to untextured mesh."""
+        fake_glb_bytes = b"FALLBACK_UNTEXTURED_GLB" * 500
+        mock_mesh = MagicMock()
+        mock_mesh.export.side_effect = lambda f, file_type: f.write(fake_glb_bytes)
+
+        mock_rembg = MagicMock(return_value=Image.new("RGB", (64, 64)))
+        mock_shape_pipe = MagicMock()
+        mock_shape_pipe.return_value = [mock_mesh]
+
+        mock_tex_pipe = MagicMock()
+        mock_tex_pipe.side_effect = RuntimeError("CUDA out of memory during multiview sampling")
+
+        mock_load_hunyuan.return_value = {
+            "rembg": mock_rembg,
+            "shape_pipeline": mock_shape_pipe,
+            "tex_pipeline": mock_tex_pipe,
+        }
+
+        mock_shapegen = MagicMock()
+        mock_shapegen.FloaterRemover = MagicMock(return_value=lambda m: m)
+        mock_shapegen.DegenerateFaceRemover = MagicMock(return_value=lambda m: m)
+        mock_shapegen.FaceReducer = MagicMock(return_value=lambda m, max_facenum: m)
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "hy3dgen": MagicMock(),
+                "hy3dgen.shapegen": mock_shapegen,
+                "hy3dgen.rembg": MagicMock(),
+                "hy3dgen.texgen": MagicMock(),
+            },
+        ):
+            job = {
+                "input": {
+                    "action": "generate3d",
+                    "image_base64": self.dummy_b64,
+                    "texture": True,
+                }
+            }
+            events = list(handler(job))
+
+        # Texture generation was attempted and failed gracefully
+        stages = [e["stage"] for e in events if e.get("type") == "progress"]
+        self.assertIn("texture_generation", stages)
+        meta_event = next(e for e in events if e.get("type") == "file_meta")
+        self.assertEqual(meta_event["name"], "model.glb")
+        self.assertEqual(meta_event["size"], len(fake_glb_bytes))
+        done_event = next(e for e in events if e.get("type") == "done")
+        self.assertIsNotNone(done_event)
+
+    def test_model_manager_tex_pipeline_offload_and_move(self):
+        """Test ModelManager.move_tex_pipeline and offload_tex_pipeline with to() method and submodels."""
+        mock_pipe = MagicMock()
+        mock_submodel_1 = MagicMock()
+        mock_submodel_2 = MagicMock()
+        mock_pipe.models = {
+            "delight_model": mock_submodel_1,
+            "multiview_model": mock_submodel_2,
+        }
+
+        # Test move
+        runpod_handler.ModelManager.move_tex_pipeline(mock_pipe, "cuda")
+        mock_pipe.to.assert_called_with("cuda")
+        mock_submodel_1.to.assert_called_with("cuda")
+        mock_submodel_2.to.assert_called_with("cuda")
+
+        # Test offload
+        runpod_handler.ModelManager.offload_tex_pipeline(mock_pipe)
+        mock_pipe.to.assert_called_with("cpu")
+        mock_submodel_1.to.assert_called_with("cpu")
+        mock_submodel_2.to.assert_called_with("cpu")
+
 
 if __name__ == "__main__":
     unittest.main()

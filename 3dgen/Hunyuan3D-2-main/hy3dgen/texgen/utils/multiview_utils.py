@@ -31,12 +31,29 @@ class Multiview_Diffusion_Net():
         current_file_path = os.path.abspath(__file__)
         custom_pipeline_path = os.path.join(os.path.dirname(current_file_path), '..', 'hunyuanpaint')
 
-        pipeline = DiffusionPipeline.from_pretrained(
-            multiview_ckpt_path,
-            custom_pipeline=custom_pipeline_path,
-            torch_dtype=torch.float16,
-            trust_remote_code=True,
-        )
+        pipeline = None
+        try:
+            import sys
+            from ..hunyuanpaint import pipeline as hunyuan_paint_mod
+            from ..hunyuanpaint.unet import modules as unet_modules
+            sys.modules.setdefault('modules', unet_modules)
+
+            pipeline = hunyuan_paint_mod.HunyuanPaintPipeline.from_pretrained(
+                multiview_ckpt_path,
+                torch_dtype=torch.float16,
+                trust_remote_code=True,
+            )
+        except Exception as direct_err:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Direct HunyuanPaintPipeline load fallback to DiffusionPipeline: {direct_err}"
+            )
+            pipeline = DiffusionPipeline.from_pretrained(
+                multiview_ckpt_path,
+                custom_pipeline=custom_pipeline_path,
+                torch_dtype=torch.float16,
+                trust_remote_code=True,
+            )
 
         if config.pipe_name in ['hunyuanpaint']:
             pipeline.scheduler = EulerAncestralDiscreteScheduler.from_config(pipeline.scheduler.config,
@@ -49,6 +66,12 @@ class Multiview_Diffusion_Net():
 
         pipeline.set_progress_bar_config(disable=True)
         self.pipeline = pipeline.to(self.device)
+
+    def to(self, device):
+        self.device = device
+        if hasattr(self, 'pipeline') and self.pipeline is not None:
+            self.pipeline.to(device)
+        return self
 
     def seed_everything(self, seed):
         random.seed(seed)
@@ -69,7 +92,8 @@ class Multiview_Diffusion_Net():
             if control_images[i].mode == 'L':
                 control_images[i] = control_images[i].point(lambda x: 255 if x > 1 else 0, mode='1')
 
-        kwargs = dict(generator=torch.Generator(device=self.pipeline.device).manual_seed(0))
+        device = getattr(self.pipeline, 'device', torch.device(self.device if isinstance(self.device, str) else 'cpu'))
+        kwargs = dict(generator=torch.Generator(device=device).manual_seed(0))
 
         num_view = len(control_images) // 2
         normal_image = [[control_images[i] for i in range(num_view)]]

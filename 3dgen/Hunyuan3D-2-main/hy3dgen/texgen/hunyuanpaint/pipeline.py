@@ -215,14 +215,22 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
             safety_checker=safety_checker,
             feature_extractor=torch.compile(feature_extractor) if use_torch_compile else feature_extractor,
         )
+        solver_device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.solver = DDIMSolver(
             scheduler.alphas_cumprod.numpy(),
             timesteps=scheduler.config.num_train_timesteps,
             ddim_timesteps=30,
-        ).to('cuda')
+        ).to(solver_device)
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
         self.is_turbo = False
+
+    def to(self, *args, **kwargs):
+        pipeline = super().to(*args, **kwargs)
+        device = kwargs.get('torch_device') if 'torch_device' in kwargs else (args[0] if len(args) > 0 else None)
+        if device is not None and hasattr(self, 'solver') and self.solver is not None:
+            self.solver.to(device)
+        return pipeline
 
     def set_turbo(self, is_turbo: bool):
         self.is_turbo = is_turbo
@@ -595,9 +603,13 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
         if self.is_turbo:
             bsz = 3
             N_gen = 15
-            index = torch.range(29, 0, -bsz, device='cuda').long()
-            timesteps = self.solver.ddim_timesteps[index]
-            self.scheduler.set_timesteps(timesteps=timesteps.cpu(), device='cuda')
+            if hasattr(self, 'solver') and self.solver is not None:
+                self.solver.to(device)
+                index = torch.arange(29, 0, -bsz, device=self.solver.ddim_timesteps.device).long()
+                timesteps = self.solver.ddim_timesteps[index]
+            else:
+                timesteps = torch.tensor([29, 26, 23, 20, 17, 14, 11, 8, 5, 2], device=device).long()
+            self.scheduler.set_timesteps(timesteps=timesteps.cpu(), device=device)
         else:
             timesteps, num_inference_steps = retrieve_timesteps(
                 self.scheduler, num_inference_steps, device, timesteps, sigmas

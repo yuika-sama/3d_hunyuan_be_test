@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 class Hunyuan3DTexGenConfig:
 
     def __init__(self, light_remover_ckpt_path, multiview_ckpt_path, subfolder_name):
-        self.device = 'cuda'
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.light_remover_ckpt_path = light_remover_ckpt_path
         self.multiview_ckpt_path = multiview_ckpt_path
 
@@ -57,10 +57,10 @@ class Hunyuan3DPaintPipeline:
         if not os.path.exists(model_path):
             # try local path
             base_dir = os.environ.get('HY3DGEN_MODELS', '~/.cache/hy3dgen')
-            model_path = os.path.expanduser(os.path.join(base_dir, model_path))
+            expanded_model_path = os.path.expanduser(os.path.join(base_dir, model_path))
 
-            delight_model_path = os.path.join(model_path, 'hunyuan3d-delight-v2-0')
-            multiview_model_path = os.path.join(model_path, subfolder)
+            delight_model_path = os.path.join(expanded_model_path, 'hunyuan3d-delight-v2-0')
+            multiview_model_path = os.path.join(expanded_model_path, subfolder)
 
             if not os.path.exists(delight_model_path) or not os.path.exists(multiview_model_path):
                 try:
@@ -68,39 +68,32 @@ class Hunyuan3DPaintPipeline:
                     os.environ["HF_HUB_DISABLE_XET"] = "1"
                     os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
                     ignore_patterns = ["*.ckpt", "*.bin", "*.pt", "*.onnx"]
-                    # download from huggingface
-                    model_path = huggingface_hub.snapshot_download(
-                        repo_id=original_model_path,
-                        allow_patterns=[
-                            "hunyuan3d-delight-v2-0/*.json",
-                            "hunyuan3d-delight-v2-0/*.txt",
-                            "hunyuan3d-delight-v2-0/*/*.json",
-                            "hunyuan3d-delight-v2-0/*/*.txt",
-                            "hunyuan3d-delight-v2-0/*/*.safetensors",
-                        ],
-                        ignore_patterns=ignore_patterns,
-                        max_workers=2,
-                    )
-                    model_path = huggingface_hub.snapshot_download(
-                        repo_id=original_model_path,
-                        allow_patterns=[
-                            f"{subfolder}/*.json",
-                            f"{subfolder}/*.txt",
-                            f"{subfolder}/*.py",
-                            f"{subfolder}/*/*.json",
-                            f"{subfolder}/*/*.txt",
-                            f"{subfolder}/*/*.safetensors",
-                        ],
-                        ignore_patterns=ignore_patterns,
-                        max_workers=2,
-                    )
-                    delight_model_path = os.path.join(model_path, 'hunyuan3d-delight-v2-0')
-                    multiview_model_path = os.path.join(model_path, subfolder)
+                    allow_patterns = [
+                        f"{subfolder}/**",
+                        "hunyuan3d-delight-v2-0/**",
+                    ]
+                    # First check local HF cache to avoid redundant network download
+                    try:
+                        resolved_path = huggingface_hub.snapshot_download(
+                            repo_id=original_model_path,
+                            allow_patterns=allow_patterns,
+                            ignore_patterns=ignore_patterns,
+                            local_files_only=True,
+                        )
+                    except Exception:
+                        resolved_path = huggingface_hub.snapshot_download(
+                            repo_id=original_model_path,
+                            allow_patterns=allow_patterns,
+                            ignore_patterns=ignore_patterns,
+                            max_workers=2,
+                        )
+                    delight_model_path = os.path.join(resolved_path, 'hunyuan3d-delight-v2-0')
+                    multiview_model_path = os.path.join(resolved_path, subfolder)
                     return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder))
                 except Exception as e:
                     import traceback
                     traceback.print_exc()
-                    raise RuntimeError(f"Something wrong while loading {model_path}: {e}")
+                    raise RuntimeError(f"Something wrong while loading {original_model_path}: {e}")
             else:
                 return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder))
         else:
@@ -110,16 +103,31 @@ class Hunyuan3DPaintPipeline:
             
     def __init__(self, config):
         self.config = config
+        self.device = getattr(config, 'device', 'cuda' if torch.cuda.is_available() else 'cpu')
         self.models = {}
         self.render = MeshRender(
             default_resolution=self.config.render_size,
-            texture_size=self.config.texture_size)
+            texture_size=self.config.texture_size,
+            device=self.device)
 
         self.load_models()
 
+    def to(self, device):
+        self.device = device
+        if hasattr(self, 'render') and self.render is not None:
+            if hasattr(self.render, 'to'):
+                self.render.to(device)
+        for model_name, model_obj in self.models.items():
+            if hasattr(model_obj, 'to'):
+                model_obj.to(device)
+            elif hasattr(model_obj, 'pipeline') and model_obj.pipeline is not None:
+                model_obj.pipeline.to(device)
+        return self
+
     def load_models(self):
-        # empty cude cache
-        torch.cuda.empty_cache()
+        # empty cuda cache
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         # Load model
         self.models['delight_model'] = Light_Shadow_Remover(self.config)
         self.models['multiview_model'] = Multiview_Diffusion_Net(self.config)
@@ -210,6 +218,7 @@ class Hunyuan3DPaintPipeline:
 
     @torch.no_grad()
     def __call__(self, mesh, image):
+        device = getattr(self, 'device', 'cuda' if torch.cuda.is_available() else 'cpu')
 
         if not isinstance(image, List):
             image = [image]
@@ -224,10 +233,24 @@ class Hunyuan3DPaintPipeline:
             
         images_prompt = [self.recenter_image(image_prompt) for image_prompt in images_prompt]
 
-        images_prompt = [self.models['delight_model'](image_prompt) for image_prompt in images_prompt]
+        # Stage 1: Delight / Shadow removal (Sequential VRAM management)
+        if 'delight_model' in self.models and self.models['delight_model'] is not None:
+            try:
+                if hasattr(self.models['delight_model'], 'to'):
+                    self.models['delight_model'].to(device)
+                images_prompt = [self.models['delight_model'](img) for img in images_prompt]
+            except Exception as e:
+                logger.warning(f"Delight processing encountered error ({e}), proceeding with recentered input.")
+            finally:
+                if hasattr(self.models['delight_model'], 'to'):
+                    self.models['delight_model'].to('cpu')
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
         mesh = mesh_uv_wrap(mesh)
 
+        if hasattr(self.render, 'to'):
+            self.render.to(device)
         self.render.load_mesh(mesh)
 
         selected_camera_elevs, selected_camera_azims, selected_view_weights = \
@@ -238,16 +261,30 @@ class Hunyuan3DPaintPipeline:
         position_maps = self.render_position_multiview(
             selected_camera_elevs, selected_camera_azims)
 
+        # Stage 2: Multiview generation (Sequential VRAM management)
         camera_info = [(((azim // 30) + 9) % 12) // {-20: 1, 0: 1, 20: 1, -90: 3, 90: 3}[
             elev] + {-20: 0, 0: 12, 20: 24, -90: 36, 90: 40}[elev] for azim, elev in
                        zip(selected_camera_azims, selected_camera_elevs)]
-        multiviews = self.models['multiview_model'](images_prompt, normal_maps + position_maps, camera_info)
+
+        if 'multiview_model' in self.models and self.models['multiview_model'] is not None:
+            try:
+                if hasattr(self.models['multiview_model'], 'to'):
+                    self.models['multiview_model'].to(device)
+                multiviews = self.models['multiview_model'](images_prompt, normal_maps + position_maps, camera_info)
+            finally:
+                if hasattr(self.models['multiview_model'], 'to'):
+                    self.models['multiview_model'].to('cpu')
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+        else:
+            raise RuntimeError("Multiview diffusion model is not initialized.")
 
         for i in range(len(multiviews)):
             # multiviews[i] = self.models['super_model'](multiviews[i])
             multiviews[i] = multiviews[i].resize(
                 (self.config.render_size, self.config.render_size))
 
+        # Stage 3: Texture baking and inpainting
         texture, mask = self.bake_from_multiview(multiviews,
                                                  selected_camera_elevs, selected_camera_azims, selected_view_weights,
                                                  method=self.config.merge_method)
