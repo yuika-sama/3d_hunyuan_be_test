@@ -76,7 +76,8 @@ def preload(full_texture: bool = False):
                         m.pipeline.to("cpu")
             print("[PRELOAD] Hunyuan3D texture model ready.")
         except Exception as e:
-            print(f"[PRELOAD WARNING] Hunyuan3D texture model failed: {e}")
+            print(f"[PRELOAD ERROR] Hunyuan3D texture model failed: {e}")
+            raise
 
     print("=" * 60)
     print(" [PRELOAD] Preload process completed.")

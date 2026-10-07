@@ -713,23 +713,28 @@ def handle_generate3d(
             try:
                 model_manager.move_tex_pipeline(tex_pipeline, device)
                 textured_mesh = tex_pipeline(mesh, image_no_bg)
-                if textured_mesh is not None:
+                if (
+                    textured_mesh is not None
+                    and getattr(getattr(textured_mesh, "visual", None), "kind", None) == "texture"
+                ):
                     mesh = textured_mesh
                     logger.info("Texture generation completed successfully. Textured mesh ready for GLB export.")
                 else:
-                    logger.warning("Texture pipeline returned None. Falling back to untextured mesh.")
+                    raise RuntimeError("Texture pipeline returned a mesh without texture data.")
             except Exception as e:
-                import traceback
                 logger.error(
                     f"Texture generation encountered an error: {e}\n{traceback.format_exc()}"
                 )
+                raise RuntimeError(
+                    "Texture generation failed; refusing to return an untextured model."
+                ) from e
             finally:
                 model_manager.offload_tex_pipeline(tex_pipeline)
                 clean_vram()
             tex_ms = int((time.time() - t_tex_start) * 1000)
         else:
-            logger.warning(
-                "Texture pipeline unavailable. Falling back to untextured mesh."
+            raise RuntimeError(
+                "Texture pipeline is unavailable; refusing to return an untextured model."
             )
 
     # 5. GLB Export

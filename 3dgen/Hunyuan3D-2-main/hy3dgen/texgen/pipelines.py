@@ -61,8 +61,11 @@ class Hunyuan3DPaintPipeline:
 
             delight_model_path = os.path.join(expanded_model_path, 'hunyuan3d-delight-v2-0')
             multiview_model_path = os.path.join(expanded_model_path, subfolder)
+            multiview_weights_path = os.path.join(
+                multiview_model_path, 'unet', 'diffusion_pytorch_model.safetensors'
+            )
 
-            if not os.path.exists(delight_model_path) or not os.path.exists(multiview_model_path):
+            if not os.path.exists(delight_model_path) or not os.path.isfile(multiview_weights_path):
                 try:
                     import huggingface_hub
                     os.environ["HF_HUB_DISABLE_XET"] = "1"
@@ -85,6 +88,10 @@ class Hunyuan3DPaintPipeline:
                             ignore_patterns=ignore_patterns,
                             local_files_only=True,
                         )
+                        if not os.path.isfile(os.path.join(
+                            resolved_path, subfolder, "unet", "diffusion_pytorch_model.safetensors"
+                        )):
+                            raise FileNotFoundError("Cached texture model is incomplete")
                     except Exception:
                         resolved_path = huggingface_hub.snapshot_download(
                             repo_id=original_model_path,

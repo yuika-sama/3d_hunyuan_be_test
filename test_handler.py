@@ -252,6 +252,7 @@ class TestRunpodHandler(unittest.TestCase):
         """Test generate3d action with texture=True, verifying texture stage and offloading."""
         fake_glb_bytes = b"GLB_TEXTURED_DATA" * 1000
         mock_mesh = MagicMock()
+        mock_mesh.visual.kind = "texture"
         mock_mesh.export.side_effect = lambda f, file_type: f.write(fake_glb_bytes)
 
         mock_rembg = MagicMock(return_value=Image.new("RGB", (64, 64)))
@@ -385,10 +386,10 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertIn("Hunyuan3D shape generation returned empty mesh", error_events[0]["error"])
 
     @patch.object(runpod_handler.model_manager, "load_hunyuan")
-    def test_handler_generate3d_texture_error_fallback_to_untextured(
+    def test_handler_generate3d_texture_error_is_reported(
         self, mock_load_hunyuan
     ):
-        """Test that if texture generation raises an exception, the handler logs error and falls back to untextured mesh."""
+        """A texture request must never silently return an untextured GLB."""
         fake_glb_bytes = b"FALLBACK_UNTEXTURED_GLB" * 500
         mock_mesh = MagicMock()
         mock_mesh.export.side_effect = lambda f, file_type: f.write(fake_glb_bytes)
@@ -429,14 +430,11 @@ class TestRunpodHandler(unittest.TestCase):
             }
             events = list(handler(job))
 
-        # Texture generation was attempted and failed gracefully
         stages = [e["stage"] for e in events if e.get("type") == "progress"]
         self.assertIn("texture_generation", stages)
-        meta_event = next(e for e in events if e.get("type") == "file_meta")
-        self.assertEqual(meta_event["name"], "model.glb")
-        self.assertEqual(meta_event["size"], len(fake_glb_bytes))
-        done_event = next(e for e in events if e.get("type") == "done")
-        self.assertIsNotNone(done_event)
+        self.assertFalse(any(e.get("type") == "file_meta" for e in events))
+        error_event = next(e for e in events if e.get("type") == "error")
+        self.assertIn("refusing to return an untextured model", error_event["error"])
 
     def test_model_manager_tex_pipeline_offload_and_move(self):
         """Test ModelManager.move_tex_pipeline and offload_tex_pipeline with to() method and submodels."""
