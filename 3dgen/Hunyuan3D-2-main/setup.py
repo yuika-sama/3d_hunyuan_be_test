@@ -30,7 +30,7 @@ setup(
         'pybind11',
         'opencv-python',
         'einops',
-        "transformers>=4.48.0",
+        "transformers>=4.44.0,<=4.47.1",
         'omegaconf',
         'trimesh',
         'pymeshlab',

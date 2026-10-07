@@ -11,3 +11,15 @@
 # optimizer states), machine-learning model code, inference-enabling code, training-enabling code,
 # fine-tuning enabling code and other elements of the foregoing made publicly available
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
+
+import types
+import torch
+
+# Compatibility shim: Recent transformers versions call torch.accelerator.current_accelerator()
+# which does not exist in PyTorch < 2.6.
+if not hasattr(torch, "accelerator"):
+    _acc_mod = types.ModuleType("accelerator")
+    _acc_mod.current_accelerator = lambda: torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    _acc_mod.is_available = lambda: torch.cuda.is_available()
+    _acc_mod.device_count = lambda: torch.cuda.device_count() if torch.cuda.is_available() else 0
+    torch.accelerator = _acc_mod

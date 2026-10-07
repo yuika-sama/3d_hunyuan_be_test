@@ -23,6 +23,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libgl1 \
     libgl1-mesa-glx \
+    libgl1-mesa-dev \
+    libglu1-mesa \
     libglib2.0-0 \
     libopengl0 \
     libegl1 \
@@ -62,7 +64,7 @@ RUN pip3 install --no-cache-dir -r /app/requirements-runpod.txt
 # Copy Hunyuan3D-2 codebase and compile C++/CUDA native rasterizers
 COPY 3dgen/Hunyuan3D-2-main /app/3dgen/Hunyuan3D-2-main
 
-RUN pip3 install --no-cache-dir -e /app/3dgen/Hunyuan3D-2-main && \
+RUN pip3 install --no-cache-dir --no-deps -e /app/3dgen/Hunyuan3D-2-main && \
     cd /app/3dgen/Hunyuan3D-2-main/hy3dgen/texgen/custom_rasterizer && \
     python3 setup.py install && \
     cd /app/3dgen/Hunyuan3D-2-main/hy3dgen/texgen/differentiable_renderer && \
