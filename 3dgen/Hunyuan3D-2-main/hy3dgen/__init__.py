@@ -35,3 +35,11 @@ try:
             setattr(transformers, _cls_name, _DummyTransformerClass)
 except Exception:
     pass
+
+# Compatibility shim: Ensure 'modules' resolves to hunyuanpaint.unet.modules for diffusers
+try:
+    import sys
+    from .texgen.hunyuanpaint.unet import modules as _unet_modules
+    sys.modules.setdefault("modules", _unet_modules)
+except Exception:
+    pass

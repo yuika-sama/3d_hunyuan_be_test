@@ -38,6 +38,12 @@ try:
 except Exception:
     pass
 
+try:
+    from hy3dgen.texgen.hunyuanpaint.unet import modules as _unet_modules
+    sys.modules.setdefault("modules", _unet_modules)
+except Exception:
+    pass
+
 
 def preload(full_texture: bool = False):
     print("=" * 60)
@@ -76,8 +82,10 @@ def preload(full_texture: bool = False):
                         m.pipeline.to("cpu")
             print("[PRELOAD] Hunyuan3D texture model ready.")
         except Exception as e:
-            print(f"[PRELOAD ERROR] Hunyuan3D texture model failed: {e}")
-            raise
+            print(f"[PRELOAD WARNING] Hunyuan3D texture model failed during preload: {e}")
+            import traceback
+            traceback.print_exc()
+            print("[PRELOAD WARNING] Continuing container startup so worker can handle requests...")
 
     print("=" * 60)
     print(" [PRELOAD] Preload process completed.")

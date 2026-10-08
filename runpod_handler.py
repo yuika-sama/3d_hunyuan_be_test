@@ -60,6 +60,13 @@ HUNYUAN_DIR = os.path.join(CURRENT_DIR, "3dgen", "Hunyuan3D-2-main")
 if HUNYUAN_DIR not in sys.path:
     sys.path.insert(0, HUNYUAN_DIR)
 
+# Compatibility shim: Ensure 'modules' resolves to hunyuanpaint.unet.modules for diffusers
+try:
+    from hy3dgen.texgen.hunyuanpaint.unet import modules as _unet_modules
+    sys.modules.setdefault("modules", _unet_modules)
+except Exception:
+    pass
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,

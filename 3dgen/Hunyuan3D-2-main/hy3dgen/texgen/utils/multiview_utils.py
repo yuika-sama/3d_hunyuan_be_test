@@ -32,8 +32,12 @@ class Multiview_Diffusion_Net():
         current_file_path = os.path.abspath(__file__)
         custom_pipeline_path = os.path.join(os.path.dirname(current_file_path), '..', 'hunyuanpaint')
 
+        import sys
         from ..hunyuanpaint import pipeline as hunyuan_paint_mod
         from ..hunyuanpaint.unet import modules as unet_modules
+
+        sys.modules.setdefault('modules', unet_modules)
+        sys.modules['modules'] = unet_modules
 
         components = {
             'unet': unet_modules.UNet2p5DConditionModel.from_pretrained(
