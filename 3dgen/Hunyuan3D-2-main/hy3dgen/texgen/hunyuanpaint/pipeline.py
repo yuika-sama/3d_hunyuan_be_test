@@ -234,6 +234,8 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
 
     def set_turbo(self, is_turbo: bool):
         self.is_turbo = is_turbo
+        if hasattr(self, 'unet') and hasattr(self.unet, 'is_turbo'):
+            self.unet.is_turbo = is_turbo
         
     @torch.no_grad()
     def encode_images(self, images):
@@ -340,11 +342,15 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
 
         if self.is_turbo:
             if 'position_maps' in cached_condition:
+                pos_maps = cached_condition['position_maps']
+                if isinstance(pos_maps, torch.Tensor) and pos_maps.device != device:
+                    pos_maps = pos_maps.to(device)
+                    cached_condition['position_maps'] = pos_maps
                 cached_condition['position_attn_mask'] = (
-                    compute_multi_resolution_mask(cached_condition['position_maps'])
+                    compute_multi_resolution_mask(pos_maps)
                 )
                 cached_condition['position_voxel_indices'] = (
-                    compute_multi_resolution_discrete_voxel_indice(cached_condition['position_maps'])
+                    compute_multi_resolution_discrete_voxel_indice(pos_maps)
                 )
             
         if (guidance_scale > 1) and (not self.is_turbo):

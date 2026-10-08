@@ -39,6 +39,13 @@ if not hasattr(torch, "accelerator"):
     _acc_mod.device_count = lambda: torch.cuda.device_count() if torch.cuda.is_available() else 0
     torch.accelerator = _acc_mod
 
+if torch.cuda.is_available():
+    torch.backends.cudnn.benchmark = True
+    if hasattr(torch.backends.cuda.matmul, "allow_tf32"):
+        torch.backends.cuda.matmul.allow_tf32 = True
+    if hasattr(torch.backends.cudnn, "allow_tf32"):
+        torch.backends.cudnn.allow_tf32 = True
+
 try:
     import transformers
     for _cls_name in ["Dinov2WithRegistersConfig", "Dinov2WithRegistersModel", "Dinov2WithRegistersPreTrainedModel"]:
@@ -601,20 +608,21 @@ def handle_generate3d(
     prep_ms = int((time.time() - t_prep_start) * 1000)
 
     # 2. Shape generation
+    t_shape_start = time.time()
+    logger.info(f"Moving shape pipeline to {device}...")
+    shape_pipeline.to(device)
+
     yield {
         "type": "progress",
         "stage": "shape_generation",
         "elapsed_ms": int((time.time() - start_time) * 1000),
         "vram": get_vram_info(),
     }
-    t_shape_start = time.time()
-
-    logger.info(f"Offloading shape pipeline to {device}...")
-    shape_pipeline.to(device)
 
     mesh = None
     try:
-        generator = torch.Generator("cpu").manual_seed(seed)
+        gen_dev = device if (torch.cuda.is_available() and str(device).startswith("cuda")) else "cpu"
+        generator = torch.Generator(device=gen_dev).manual_seed(seed)
         outputs = shape_pipeline(
             image=image_no_bg,
             generator=generator,
@@ -650,8 +658,8 @@ def handle_generate3d(
         )
         try:
             shape_pipeline.enable_flashvdm(enabled=False)
-            shape_pipeline.to(device)
-            generator = torch.Generator("cpu").manual_seed(seed)
+            gen_dev = device if (torch.cuda.is_available() and str(device).startswith("cuda")) else "cpu"
+            generator = torch.Generator(device=gen_dev).manual_seed(seed)
             outputs = shape_pipeline(
                 image=image_no_bg,
                 generator=generator,
@@ -710,15 +718,15 @@ def handle_generate3d(
             tex_pipeline = model_manager.load_tex_pipeline()
 
         if tex_pipeline is not None:
-            yield {
-                "type": "progress",
-                "stage": "texture_generation",
-                "elapsed_ms": int((time.time() - start_time) * 1000),
-                "vram": get_vram_info(),
-            }
             t_tex_start = time.time()
             try:
                 model_manager.move_tex_pipeline(tex_pipeline, device)
+                yield {
+                    "type": "progress",
+                    "stage": "texture_generation",
+                    "elapsed_ms": int((time.time() - start_time) * 1000),
+                    "vram": get_vram_info(),
+                }
                 textured_mesh = tex_pipeline(mesh, image_no_bg)
                 if (
                     textured_mesh is not None

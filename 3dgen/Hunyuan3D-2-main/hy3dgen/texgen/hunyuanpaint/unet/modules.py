@@ -212,6 +212,8 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
                 if position_attn_mask is not None:
                     if multivew_hidden_states.shape[1] in position_attn_mask:
                         position_mask = position_attn_mask[multivew_hidden_states.shape[1]]
+                        if isinstance(position_mask, torch.Tensor):
+                            position_mask = position_mask.to(multivew_hidden_states.device)
                 position_indices = None
                 if position_voxel_indices is not None:
                     if multivew_hidden_states.shape[1] in position_voxel_indices:
@@ -570,11 +572,13 @@ class UNet2p5DConditionModel(torch.nn.Module):
         ref_scale = cached_condition.get('ref_scale', 1.0)
 
         if self.is_turbo:
+            position_attn_mask = cached_condition.get('position_attn_mask', None)
+            position_voxel_indices = cached_condition.get('position_voxel_indices', None)
             cross_attention_kwargs_ = {
                 'mode': 'r', 'num_in_batch': N_gen,
                 'condition_embed_dict': condition_embed_dict,
-                'position_attn_mask':position_attn_mask, 
-                'position_voxel_indices':position_voxel_indices,
+                'position_attn_mask': position_attn_mask, 
+                'position_voxel_indices': position_voxel_indices,
                 'mva_scale': mva_scale,
                 'ref_scale': ref_scale,
             }
