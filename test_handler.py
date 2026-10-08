@@ -470,7 +470,8 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertIn('f"{subfolder}/unet/diffusion_pytorch_model.safetensors"', cache_source)
         self.assertIn("torch.load(bin_path", unet_source)
         self.assertNotIn("load_file(safetensors_path", unet_source)
-        self.assertEqual(component_source.count("use_safetensors=False"), 2)
+        self.assertIn("custom_pipeline=custom_pipeline_path", component_source)
+        self.assertNotIn("**components", component_source)
 
     def test_paint_pipeline_device_matching(self):
         """Ensure texture pipeline aligns tensor devices and verifies file sizes."""
