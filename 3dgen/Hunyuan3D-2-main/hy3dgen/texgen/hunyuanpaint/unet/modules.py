@@ -428,22 +428,9 @@ class UNet2p5DConditionModel(torch.nn.Module):
         unet = UNet2DConditionModel(**config)
         unet = UNet2p5DConditionModel(unet)
         
-        safetensors_path = os.path.join(pretrained_model_name_or_path, 'diffusion_pytorch_model.safetensors')
         bin_path = os.path.join(pretrained_model_name_or_path, 'diffusion_pytorch_model.bin')
-        
-        if os.path.exists(safetensors_path):
-            from safetensors.torch import load_file
-            unet_ckpt = load_file(safetensors_path, device='cpu')
-        elif os.path.exists(bin_path):
-            try:
-                unet_ckpt = torch.load(bin_path, map_location='cpu', weights_only=True)
-            except Exception:
-                unet_ckpt = torch.load(bin_path, map_location='cpu', weights_only=False)
-        else:
-            raise FileNotFoundError(
-                f"Neither 'diffusion_pytorch_model.safetensors' nor 'diffusion_pytorch_model.bin' found in {pretrained_model_name_or_path}"
-            )
-            
+        unet_ckpt = torch.load(bin_path, map_location='cpu', weights_only=True)
+
         unet.load_state_dict(unet_ckpt, strict=True)
         unet = unet.to(torch_dtype)
         return unet

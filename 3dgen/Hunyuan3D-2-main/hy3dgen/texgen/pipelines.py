@@ -54,7 +54,7 @@ class Hunyuan3DPaintPipeline:
     @classmethod
     def from_pretrained(cls, model_path, subfolder='hunyuan3d-paint-v2-0-turbo'):
         required_weights = (
-            os.path.join(subfolder, 'unet', 'diffusion_pytorch_model.safetensors'),
+            os.path.join(subfolder, 'unet', 'diffusion_pytorch_model.bin'),
             os.path.join(subfolder, 'vae', 'diffusion_pytorch_model.bin'),
             os.path.join(subfolder, 'text_encoder', 'pytorch_model.bin'),
             os.path.join(subfolder, 'image_encoder', 'model.safetensors'),
@@ -83,7 +83,7 @@ class Hunyuan3DPaintPipeline:
                         "*.ckpt",
                         "*.pt",
                         "*.onnx",
-                        f"{subfolder}/unet/diffusion_pytorch_model.bin",
+                        f"{subfolder}/unet/diffusion_pytorch_model.safetensors",
                     ]
                     allow_patterns = [
                         f"{subfolder}/**",

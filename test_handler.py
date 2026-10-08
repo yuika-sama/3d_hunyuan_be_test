@@ -463,16 +463,14 @@ class TestRunpodHandler(unittest.TestCase):
         """Keep the mixed Hunyuan texture checkpoint formats explicit."""
         root = Path(__file__).parent / "3dgen/Hunyuan3D-2-main/hy3dgen/texgen"
         cache_source = (root / "pipelines.py").read_text(encoding="utf-8")
-        loader_source = (root / "utils/multiview_utils.py").read_text(encoding="utf-8")
+        component_source = (root / "utils/multiview_utils.py").read_text(encoding="utf-8")
+        unet_source = (root / "hunyuanpaint/unet/modules.py").read_text(encoding="utf-8")
 
-        for weight in (
-            "diffusion_pytorch_model.safetensors",
-            "diffusion_pytorch_model.bin",
-            "pytorch_model.bin",
-            "model.safetensors",
-        ):
-            self.assertIn(weight, cache_source)
-        self.assertEqual(loader_source.count("use_safetensors=False"), 2)
+        self.assertIn("os.path.join(subfolder, 'unet', 'diffusion_pytorch_model.bin')", cache_source)
+        self.assertIn('f"{subfolder}/unet/diffusion_pytorch_model.safetensors"', cache_source)
+        self.assertIn("torch.load(bin_path", unet_source)
+        self.assertNotIn("load_file(safetensors_path", unet_source)
+        self.assertEqual(component_source.count("use_safetensors=False"), 2)
 
 
 if __name__ == "__main__":
