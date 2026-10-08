@@ -53,6 +53,18 @@ class Hunyuan3DTexGenConfig:
 class Hunyuan3DPaintPipeline:
     @classmethod
     def from_pretrained(cls, model_path, subfolder='hunyuan3d-paint-v2-0-turbo'):
+        required_weights = (
+            os.path.join(subfolder, 'unet', 'diffusion_pytorch_model.safetensors'),
+            os.path.join(subfolder, 'vae', 'diffusion_pytorch_model.bin'),
+            os.path.join(subfolder, 'text_encoder', 'pytorch_model.bin'),
+            os.path.join(subfolder, 'image_encoder', 'model.safetensors'),
+            os.path.join('hunyuan3d-delight-v2-0', 'unet', 'diffusion_pytorch_model.safetensors'),
+            os.path.join('hunyuan3d-delight-v2-0', 'vae', 'diffusion_pytorch_model.safetensors'),
+            os.path.join('hunyuan3d-delight-v2-0', 'text_encoder', 'model.safetensors'),
+        )
+
+        def has_required_weights(root):
+            return all(os.path.isfile(os.path.join(root, path)) for path in required_weights)
         original_model_path = model_path
         if not os.path.exists(model_path):
             # try local path
@@ -61,11 +73,8 @@ class Hunyuan3DPaintPipeline:
 
             delight_model_path = os.path.join(expanded_model_path, 'hunyuan3d-delight-v2-0')
             multiview_model_path = os.path.join(expanded_model_path, subfolder)
-            multiview_weights_path = os.path.join(
-                multiview_model_path, 'unet', 'diffusion_pytorch_model.safetensors'
-            )
 
-            if not os.path.exists(delight_model_path) or not os.path.isfile(multiview_weights_path):
+            if not os.path.exists(delight_model_path) or not has_required_weights(expanded_model_path):
                 try:
                     import huggingface_hub
                     os.environ["HF_HUB_DISABLE_XET"] = "1"
@@ -88,9 +97,7 @@ class Hunyuan3DPaintPipeline:
                             ignore_patterns=ignore_patterns,
                             local_files_only=True,
                         )
-                        if not os.path.isfile(os.path.join(
-                            resolved_path, subfolder, "unet", "diffusion_pytorch_model.safetensors"
-                        )):
+                        if not has_required_weights(resolved_path):
                             raise FileNotFoundError("Cached texture model is incomplete")
                     except Exception:
                         resolved_path = huggingface_hub.snapshot_download(
@@ -99,6 +106,8 @@ class Hunyuan3DPaintPipeline:
                             ignore_patterns=ignore_patterns,
                             max_workers=2,
                         )
+                        if not has_required_weights(resolved_path):
+                            raise FileNotFoundError("Downloaded texture model is incomplete")
                     delight_model_path = os.path.join(resolved_path, 'hunyuan3d-delight-v2-0')
                     multiview_model_path = os.path.join(resolved_path, subfolder)
                     return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder))
@@ -109,6 +118,8 @@ class Hunyuan3DPaintPipeline:
             else:
                 return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder))
         else:
+            if not has_required_weights(model_path):
+                raise FileNotFoundError(f"Texture model is incomplete: {model_path}")
             delight_model_path = os.path.join(model_path, 'hunyuan3d-delight-v2-0')
             multiview_model_path = os.path.join(model_path, subfolder)
             return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder))

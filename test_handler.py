@@ -11,6 +11,7 @@ import base64
 import hashlib
 import io
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from PIL import Image
@@ -457,6 +458,21 @@ class TestRunpodHandler(unittest.TestCase):
         mock_pipe.to.assert_called_with("cpu")
         mock_submodel_1.to.assert_called_with("cpu")
         mock_submodel_2.to.assert_called_with("cpu")
+
+    def test_texture_loader_uses_repository_weight_formats(self):
+        """Keep the mixed Hunyuan texture checkpoint formats explicit."""
+        root = Path(__file__).parent / "3dgen/Hunyuan3D-2-main/hy3dgen/texgen"
+        cache_source = (root / "pipelines.py").read_text(encoding="utf-8")
+        loader_source = (root / "utils/multiview_utils.py").read_text(encoding="utf-8")
+
+        for weight in (
+            "diffusion_pytorch_model.safetensors",
+            "diffusion_pytorch_model.bin",
+            "pytorch_model.bin",
+            "model.safetensors",
+        ):
+            self.assertIn(weight, cache_source)
+        self.assertEqual(loader_source.count("use_safetensors=False"), 2)
 
 
 if __name__ == "__main__":

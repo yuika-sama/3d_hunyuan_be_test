@@ -18,8 +18,9 @@ import random
 import numpy as np
 import torch
 from typing import List
-from diffusers import DiffusionPipeline
+from diffusers import AutoencoderKL, DiffusionPipeline
 from diffusers import EulerAncestralDiscreteScheduler, LCMScheduler
+from transformers import CLIPTextModel
 
 
 class Multiview_Diffusion_Net():
@@ -31,17 +32,30 @@ class Multiview_Diffusion_Net():
         current_file_path = os.path.abspath(__file__)
         custom_pipeline_path = os.path.join(os.path.dirname(current_file_path), '..', 'hunyuanpaint')
 
-        pipeline = None
-        try:
-            import sys
-            from ..hunyuanpaint import pipeline as hunyuan_paint_mod
-            from ..hunyuanpaint.unet import modules as unet_modules
-            sys.modules.setdefault('modules', unet_modules)
+        from ..hunyuanpaint import pipeline as hunyuan_paint_mod
+        from ..hunyuanpaint.unet import modules as unet_modules
 
+        components = {
+            'unet': unet_modules.UNet2p5DConditionModel.from_pretrained(
+                os.path.join(multiview_ckpt_path, 'unet'), torch_dtype=torch.float16
+            ),
+            'vae': AutoencoderKL.from_pretrained(
+                os.path.join(multiview_ckpt_path, 'vae'),
+                torch_dtype=torch.float16,
+                use_safetensors=False,
+            ),
+            'text_encoder': CLIPTextModel.from_pretrained(
+                os.path.join(multiview_ckpt_path, 'text_encoder'),
+                torch_dtype=torch.float16,
+                use_safetensors=False,
+            ),
+        }
+
+        try:
             pipeline = hunyuan_paint_mod.HunyuanPaintPipeline.from_pretrained(
                 multiview_ckpt_path,
                 torch_dtype=torch.float16,
-                trust_remote_code=True,
+                **components,
             )
         except Exception as direct_err:
             import logging
@@ -52,7 +66,7 @@ class Multiview_Diffusion_Net():
                 multiview_ckpt_path,
                 custom_pipeline=custom_pipeline_path,
                 torch_dtype=torch.float16,
-                trust_remote_code=True,
+                **components,
             )
 
         if config.pipe_name in ['hunyuanpaint']:

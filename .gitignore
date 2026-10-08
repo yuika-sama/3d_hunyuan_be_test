@@ -13,3 +13,5 @@ __pycache__/
 
 # Ignore local VS Code settings
 .vscode/
+
+.env
