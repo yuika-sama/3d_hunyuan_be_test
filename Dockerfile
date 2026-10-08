@@ -8,6 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     OLLAMA_MODELS=/root/.ollama/models \
     TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0+PTX" \
     FORCE_CUDA="1" \
+    MAX_JOBS="4" \
     HF_HUB_DISABLE_XET="1" \
     HF_HUB_ENABLE_HF_TRANSFER="0" \
     PYTHONPATH="/app:/app/3dgen/Hunyuan3D-2-main"
@@ -42,7 +43,8 @@ RUN ln -sf /usr/bin/python3.10 /usr/bin/python && \
 
 # Install PyTorch with CUDA 12.1
 RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip3 install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121
+    pip3 install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121 && \
+    rm -rf /root/.cache/pip
 
 # Install Ollama CLI and daemon
 RUN curl -fsSL https://ollama.com/install.sh | sh
@@ -59,7 +61,8 @@ WORKDIR /app
 
 # Copy dependency definitions and install Python packages
 COPY requirements-runpod.txt /app/requirements-runpod.txt
-RUN pip3 install --no-cache-dir -r /app/requirements-runpod.txt
+RUN pip3 install --no-cache-dir -r /app/requirements-runpod.txt && \
+    rm -rf /root/.cache/pip
 
 # Copy Hunyuan3D-2 codebase and compile C++/CUDA native rasterizers
 COPY 3dgen/Hunyuan3D-2-main /app/3dgen/Hunyuan3D-2-main
@@ -68,17 +71,18 @@ RUN pip3 install --no-cache-dir --no-deps -e /app/3dgen/Hunyuan3D-2-main && \
     cd /app/3dgen/Hunyuan3D-2-main/hy3dgen/texgen/custom_rasterizer && \
     python3 setup.py install && \
     cd /app/3dgen/Hunyuan3D-2-main/hy3dgen/texgen/differentiable_renderer && \
-    python3 setup.py install
+    python3 setup.py install && \
+    rm -rf /root/.cache/pip
 
-# Copy application files
+# Pre-download rembg and Hunyuan3D shape model into Docker image layer (cached layer)
+COPY preload_models.py /app/preload_models.py
+RUN python3 /app/preload_models.py && \
+    rm -rf /root/.cache/pip
+
+# Copy application handler and entrypoint (code changes here will NOT bust cache above)
 COPY runpod_handler.py /app/runpod_handler.py
 COPY test_handler.py /app/test_handler.py
-COPY preload_models.py /app/preload_models.py
 COPY start.sh /app/start.sh
-
-# Pre-download rembg and Hunyuan3D shape model into Docker image layer
-RUN python3 /app/preload_models.py
-
 RUN chmod +x /app/start.sh
 
 # Run entrypoint script
