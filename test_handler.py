@@ -472,6 +472,18 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertNotIn("load_file(safetensors_path", unet_source)
         self.assertEqual(component_source.count("use_safetensors=False"), 2)
 
+    def test_paint_pipeline_device_matching(self):
+        """Ensure texture pipeline aligns tensor devices and verifies file sizes."""
+        root = Path(__file__).parent / "3dgen/Hunyuan3D-2-main/hy3dgen/texgen"
+        pipeline_source = (root / "hunyuanpaint/pipeline.py").read_text(encoding="utf-8")
+        cache_source = (root / "pipelines.py").read_text(encoding="utf-8")
+
+        self.assertIn("images = images.to(device=device, dtype=dtype)", pipeline_source)
+        self.assertIn(".to(device)", pipeline_source)
+        self.assertNotIn('.to("cuda")', pipeline_source)
+        self.assertIn("os.path.getsize(os.path.join(root, path)) > 1000", cache_source)
+
 
 if __name__ == "__main__":
     unittest.main()
+

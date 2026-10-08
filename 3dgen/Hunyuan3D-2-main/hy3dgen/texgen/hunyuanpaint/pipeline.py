@@ -240,9 +240,13 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
         B = images.shape[0]
         images = rearrange(images, 'b n c h w -> (b n) c h w')
 
-        dtype = next(self.vae.parameters()).dtype
+        vae_param = next(self.vae.parameters(), None)
+        dtype = vae_param.dtype if vae_param is not None else torch.float16
+        device = vae_param.device if vae_param is not None else getattr(self, "device", "cpu")
+
         images = (images - 0.5) * 2.0
-        posterior = self.vae.encode(images.to(dtype)).latent_dist
+        images = images.to(device=device, dtype=dtype)
+        posterior = self.vae.encode(images).latent_dist
         latents = posterior.sample() * self.vae.config.scaling_factor
 
         latents = rearrange(latents, '(b n) c h w -> b n c h w', b=B)
@@ -296,7 +300,7 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                     if img.shape[2] > 3:
                         alpha = img[:, :, 3:]
                         img = img[:, :, :3] * alpha + bg_c * (1 - alpha)
-                    img = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).contiguous().half().to("cuda")
+                    img = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).contiguous().half().to(device)
                     view_imgs.append(img)
                 view_imgs = torch.cat(view_imgs, dim=0)
                 images_tensor.append(view_imgs.unsqueeze(0))
@@ -307,14 +311,14 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
         if "normal_imgs" in cached_condition:
 
             if isinstance(cached_condition["normal_imgs"], List):
-                cached_condition["normal_imgs"] = convert_pil_list_to_tensor(cached_condition["normal_imgs"])
+                cached_condition["normal_imgs"] = convert_pil_list_to_tensor(cached_condition["normal_imgs"]).to(device)
 
             cached_condition['normal_imgs'] = self.encode_images(cached_condition["normal_imgs"])
 
         if "position_imgs" in cached_condition:
 
             if isinstance(cached_condition["position_imgs"], List):
-                cached_condition["position_imgs"] = convert_pil_list_to_tensor(cached_condition["position_imgs"])
+                cached_condition["position_imgs"] = convert_pil_list_to_tensor(cached_condition["position_imgs"]).to(device)
 
             cached_condition['position_maps'] = cached_condition['position_imgs']            
             cached_condition["position_imgs"] = self.encode_images(cached_condition["position_imgs"])

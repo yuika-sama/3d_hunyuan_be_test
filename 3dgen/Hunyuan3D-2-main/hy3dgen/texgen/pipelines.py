@@ -64,7 +64,10 @@ class Hunyuan3DPaintPipeline:
         )
 
         def has_required_weights(root):
-            return all(os.path.isfile(os.path.join(root, path)) for path in required_weights)
+            return all(
+                os.path.isfile(os.path.join(root, path)) and os.path.getsize(os.path.join(root, path)) > 1000
+                for path in required_weights
+            )
         original_model_path = model_path
         if not os.path.exists(model_path):
             # try local path
@@ -255,6 +258,13 @@ class Hunyuan3DPaintPipeline:
             images_prompt.append(image_prompt)
             
         images_prompt = [self.recenter_image(image_prompt) for image_prompt in images_prompt]
+
+        # Ensure multiview_model is offloaded to CPU while delight_model runs to prevent simultaneous VRAM spikes
+        if 'multiview_model' in self.models and self.models['multiview_model'] is not None:
+            if hasattr(self.models['multiview_model'], 'to'):
+                self.models['multiview_model'].to('cpu')
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         # Stage 1: Delight / Shadow removal (Sequential VRAM management)
         if 'delight_model' in self.models and self.models['delight_model'] is not None:

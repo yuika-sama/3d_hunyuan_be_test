@@ -301,7 +301,7 @@ class ModelManager:
                 self.hunyuan_worker["tex_pipeline"] = tex_pipeline
                 logger.info("Texture pipeline loaded and offloaded to CPU.")
             except Exception as e:
-                logger.error(f"Failed to load texture model: {e}")
+                logger.error(f"Failed to load texture model: {e}\n{traceback.format_exc()}")
                 self.hunyuan_worker["tex_pipeline"] = None
 
         return self.hunyuan_worker.get("tex_pipeline")

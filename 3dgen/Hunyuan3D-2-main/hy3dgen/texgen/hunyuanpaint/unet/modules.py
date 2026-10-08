@@ -429,7 +429,10 @@ class UNet2p5DConditionModel(torch.nn.Module):
         unet = UNet2p5DConditionModel(unet)
         
         bin_path = os.path.join(pretrained_model_name_or_path, 'diffusion_pytorch_model.bin')
-        unet_ckpt = torch.load(bin_path, map_location='cpu', weights_only=True)
+        try:
+            unet_ckpt = torch.load(bin_path, map_location='cpu', weights_only=True)
+        except Exception:
+            unet_ckpt = torch.load(bin_path, map_location='cpu', weights_only=False)
 
         unet.load_state_dict(unet_ckpt, strict=True)
         unet = unet.to(torch_dtype)
