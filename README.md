@@ -257,7 +257,7 @@ Các lỗi gateway thường gặp: `400` ảnh rỗng hoặc bị chặn NSFW, 
 ```bash
 python -m pytest test_handler.py test_gateway.py -v
 ```
-*(Bao gồm 22 unit tests cho worker, unified gateway, texture fallback, Base64, chunking và checksum.)*
+*(Bao gồm 23 unit tests cho worker, model preload, unified gateway, texture fallback, Base64, chunking và checksum.)*
 
 ### 5.2. Chạy Giao diện Test Web Trực quan
 Mở trực tiếp file [`test_local_serverless.html`](file:///f:/codingSpace/Asm/3d_hunyuan_be/test_local_serverless.html) trong trình duyệt để nhập **Runpod API Key** và **Endpoint ID**, kéo thả ảnh và xem 3D Mesh xoay 360 độ theo thời gian thực.

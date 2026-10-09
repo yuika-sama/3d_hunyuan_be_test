@@ -48,6 +48,22 @@ except Exception:
     pass
 
 
+def preload_shape_checkpoint():
+    """Download shape weights without instantiating the multi-GB model."""
+    from huggingface_hub import snapshot_download
+
+    extension = "safetensors" if HUNYUAN_SHAPE_USE_SAFETENSORS else "ckpt"
+    snapshot_download(
+        repo_id=HUNYUAN_SHAPE_MODEL,
+        allow_patterns=[
+            f"{HUNYUAN_SHAPE_SUBFOLDER}/*.yaml",
+            f"{HUNYUAN_SHAPE_SUBFOLDER}/*.json",
+            f"{HUNYUAN_SHAPE_SUBFOLDER}/*.{extension}",
+        ],
+        max_workers=2,
+    )
+
+
 def preload(full_texture: bool = False):
     print("=" * 60)
     print(f" [PRELOAD] Starting model preload (full_texture={full_texture})...")
@@ -63,13 +79,7 @@ def preload(full_texture: bool = False):
 
     print("[PRELOAD] 2/3 Checking / downloading Hunyuan3D shape model...")
     try:
-        from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
-        Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
-            HUNYUAN_SHAPE_MODEL,
-            subfolder=HUNYUAN_SHAPE_SUBFOLDER,
-            use_safetensors=HUNYUAN_SHAPE_USE_SAFETENSORS,
-            device="cpu",
-        )
+        preload_shape_checkpoint()
         print("[PRELOAD] Hunyuan3D shape model ready.")
     except Exception as e:
         print(f"[PRELOAD WARNING] Hunyuan3D shape model failed: {e}")
