@@ -21,6 +21,8 @@ from typing import List
 from diffusers import DiffusionPipeline
 from diffusers import EulerAncestralDiscreteScheduler, LCMScheduler
 
+from ..hunyuanpaint.unet.modules import UNet2p5DConditionModel
+
 
 class Multiview_Diffusion_Net():
     def __init__(self, config) -> None:
@@ -36,6 +38,8 @@ class Multiview_Diffusion_Net():
             custom_pipeline=custom_pipeline_path,
             torch_dtype=torch.float16,
         )
+        # The Hub checkpoint still ships a turbo forward with undefined position masks.
+        pipeline.unet.forward = UNet2p5DConditionModel.forward.__get__(pipeline.unet, type(pipeline.unet))
 
         if config.pipe_name in ['hunyuanpaint']:
             pipeline.scheduler = EulerAncestralDiscreteScheduler.from_config(pipeline.scheduler.config,

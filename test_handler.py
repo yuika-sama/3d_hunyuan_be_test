@@ -472,6 +472,7 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertNotIn("load_file(safetensors_path", unet_source)
         self.assertIn("custom_pipeline=custom_pipeline_path", component_source)
         self.assertNotIn("**components", component_source)
+        self.assertIn("UNet2p5DConditionModel.forward.__get__", component_source)
 
     def test_paint_pipeline_device_matching(self):
         """Ensure texture pipeline aligns tensor devices and verifies file sizes."""
