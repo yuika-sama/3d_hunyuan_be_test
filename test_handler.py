@@ -96,6 +96,61 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertEqual(events[0]["type"], "error")
         self.assertIn("Invalid action", events[0]["error"])
 
+    @patch.object(runpod_handler, "handle_generate3d")
+    @patch.object(runpod_handler, "handle_custom_describe")
+    @patch.object(runpod_handler, "handle_caption")
+    @patch.object(runpod_handler, "handle_analyze")
+    def test_handler_pipeline_runs_all_stages(
+        self, mock_analyze, mock_caption, mock_describe, mock_generate3d
+    ):
+        mock_analyze.return_value = iter(
+            [{"type": "result", "action": "analyze", "data": {"is_nsfw": False}}]
+        )
+        mock_caption.return_value = iter(
+            [{"type": "result", "action": "caption", "data": {"caption": "a chair"}}]
+        )
+        mock_describe.return_value = iter(
+            [{
+                "type": "result",
+                "action": "custom_describe",
+                "data": {"description": "Ghế gỗ", "description_en": "Wooden chair"},
+            }]
+        )
+        mock_generate3d.return_value = iter(
+            [
+                {"type": "file_meta", "name": "model.glb", "chunks": 1},
+                {"type": "file_chunk", "index": 0, "data": "Z2xi"},
+                {"type": "done"},
+            ]
+        )
+
+        events = list(handler({"input": {"action": "pipeline", "image_base64": self.dummy_b64}}))
+
+        result = next(event for event in events if event.get("action") == "pipeline")
+        self.assertEqual(result["data"]["rich_prompt"], "Ghế gỗ")
+        self.assertTrue(any(event.get("type") == "file_chunk" for event in events))
+        mock_generate3d.assert_called_once()
+        self.assertTrue(mock_generate3d.call_args.args[0]["texture"])
+
+    @patch.object(runpod_handler, "handle_generate3d")
+    @patch.object(runpod_handler, "handle_custom_describe")
+    @patch.object(runpod_handler, "handle_caption")
+    @patch.object(runpod_handler, "handle_analyze")
+    def test_handler_pipeline_stops_on_nsfw(
+        self, mock_analyze, mock_caption, mock_describe, mock_generate3d
+    ):
+        mock_analyze.return_value = iter(
+            [{"type": "result", "action": "analyze", "data": {"is_nsfw": True}}]
+        )
+
+        events = list(handler({"input": {"action": "pipeline", "image_base64": self.dummy_b64}}))
+
+        error = next(event for event in events if event.get("type") == "error")
+        self.assertEqual(error["stage"], "moderation")
+        mock_caption.assert_not_called()
+        mock_describe.assert_not_called()
+        mock_generate3d.assert_not_called()
+
     @patch.object(runpod_handler.model_manager, "load_nsfw")
     def test_handler_analyze_success(self, mock_load_nsfw):
         """Test analyze action stream events with mocked NSFW model."""

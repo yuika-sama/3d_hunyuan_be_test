@@ -182,6 +182,26 @@ curl -X POST http://127.0.0.1:4000/pipeline/process-all \
 
 Nếu ảnh vi phạm NSFW, gateway trả HTTP 400 và không gọi ba model còn lại. Khi thành công, response chứa metadata cùng `glb_url`; tải model qua `GET /pipeline/result/{task_id}.glb`.
 
+### 4.4. Unified pipeline trên Runpod
+
+Endpoint queue hiện tại hỗ trợ thêm action `pipeline`, chạy tuần tự cùng luồng trên trong một job và stream metadata cùng các chunk GLB về client:
+
+```json
+{
+  "input": {
+    "action": "pipeline",
+    "image_base64": "data:image/png;base64,iVBORw0KGgo...",
+    "prompt": "Phân tích vật liệu và hình khối để dựng 3D"
+  },
+  "policy": {
+    "executionTimeout": 1200000,
+    "ttl": 1800000
+  }
+}
+```
+
+Gửi payload tới `POST https://api.runpod.ai/v2/{ENDPOINT_ID}/run`, rồi đọc tiến độ qua `/stream/{JOB_ID}`. Ảnh NSFW dừng ngay trước các bước caption, phân tích và dựng 3D. Texture được bật cố định ở độ phân giải 1024 cho action này.
+
 ---
 
 ## 🧪 5. Kiểm thử & Chạy thử Nghiệm
@@ -190,7 +210,7 @@ Nếu ảnh vi phạm NSFW, gateway trả HTTP 400 và không gọi ba model cò
 ```bash
 python -m pytest test_handler.py test_gateway.py -v
 ```
-*(Bao gồm 20 unit tests cho worker, unified gateway, texture fallback, Base64, chunking và checksum.)*
+*(Bao gồm 19 unit tests cho worker, unified gateway, texture fallback, Base64, chunking và checksum.)*
 
 ### 5.2. Chạy Giao diện Test Web Trực quan
 Mở trực tiếp file [`test_local_serverless.html`](file:///f:/codingSpace/Asm/3d_hunyuan_be/test_local_serverless.html) trong trình duyệt để nhập **Runpod API Key** và **Endpoint ID**, kéo thả ảnh và xem 3D Mesh xoay 360 độ theo thời gian thực.

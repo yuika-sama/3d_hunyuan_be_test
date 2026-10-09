@@ -1,10 +1,11 @@
 """
 Runpod Serverless Unified Worker Handler
-Supports 4 actions:
+Supports 5 actions:
 1. analyze: NSFW detection (CPU)
 2. caption: BLIP image captioning (CPU)
 3. custom_describe: LLaVA 7B via Ollama (GPU with immediate unload)
 4. generate3d: Hunyuan3D-2 geometry + texture generation (GPU with low-VRAM offloading)
+5. pipeline: NSFW -> BLIP -> LLaVA -> textured Hunyuan3D in one queued job
 """
 
 import os
@@ -785,6 +786,82 @@ def handle_generate3d(
     }
 
 
+def handle_pipeline(
+    job_input: Dict[str, Any], start_time: float
+) -> Generator[Dict[str, Any], None, None]:
+    """Run moderation, captioning, visual analysis, and textured 3D in one queued job."""
+    moderation = None
+    for event in handle_analyze(job_input, start_time):
+        if event.get("type") == "result":
+            moderation = event["data"]
+        else:
+            if event.get("type") == "progress":
+                event = {**event, "stage": f"moderation.{event['stage']}"}
+            yield event
+
+    if not moderation:
+        raise RuntimeError("NSFW stage returned no result.")
+    if moderation.get("is_nsfw"):
+        yield {
+            "type": "error",
+            "stage": "moderation",
+            "error": "Image violates NSFW policy.",
+            "data": moderation,
+        }
+        return
+
+    caption_input = {**job_input, "max_new_tokens": 30, "min_new_tokens": 5}
+    caption = None
+    for event in handle_caption(caption_input, start_time):
+        if event.get("type") == "result":
+            caption = event["data"]
+        else:
+            if event.get("type") == "progress":
+                event = {**event, "stage": f"caption.{event['stage']}"}
+            yield event
+
+    if not caption:
+        raise RuntimeError("Caption stage returned no result.")
+
+    short_text = caption.get("caption") or "the main object"
+    analysis_request = job_input.get("prompt") or (
+        "Phân tích vật thể để dựng mô hình 3D: hình khối, vật liệu, các mặt khuất, "
+        "chi tiết bề mặt và ánh sáng."
+    )
+    describe_input = {
+        **job_input,
+        "prompt": f"Mô tả ngắn: {short_text}. {analysis_request}",
+    }
+    description = None
+    for event in handle_custom_describe(describe_input, start_time):
+        if event.get("type") == "result":
+            description = event["data"]
+        else:
+            if event.get("type") == "progress":
+                event = {**event, "stage": f"analysis.{event['stage']}"}
+            yield event
+
+    if not description:
+        raise RuntimeError("Visual analysis stage returned no result.")
+
+    yield {
+        "type": "result",
+        "action": "pipeline",
+        "data": {
+            "moderation": moderation,
+            "description": caption,
+            "rich_prompt": description.get("description"),
+            "rich_prompt_en": description.get("description_en"),
+        },
+    }
+
+    generate_input = {**job_input, "texture": True, "texture_resolution": 1024}
+    for event in handle_generate3d(generate_input, start_time):
+        if event.get("type") == "progress":
+            event = {**event, "stage": f"generate3d.{event['stage']}"}
+        yield event
+
+
 def handler(job: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
     """
     Main entrypoint generator for Runpod Serverless.
@@ -806,7 +883,7 @@ def handler(job: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
         yield {
             "type": "error",
             "stage": "validate_input",
-            "error": "Missing required field 'action' in input. Expected: analyze, caption, custom_describe, generate3d.",
+            "error": "Missing required field 'action' in input. Expected: analyze, caption, custom_describe, generate3d, pipeline.",
             "timings": {"total_ms": 0},
         }
         return
@@ -822,11 +899,13 @@ def handler(job: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
             yield from handle_custom_describe(job_input, start_time)
         elif action == "generate3d":
             yield from handle_generate3d(job_input, start_time)
+        elif action == "pipeline":
+            yield from handle_pipeline(job_input, start_time)
         else:
             yield {
                 "type": "error",
                 "stage": "validate_input",
-                "error": f"Invalid action '{action}'. Supported actions: analyze, caption, custom_describe, generate3d.",
+                "error": f"Invalid action '{action}'. Supported actions: analyze, caption, custom_describe, generate3d, pipeline.",
                 "timings": {"total_ms": int((time.time() - start_time) * 1000)},
             }
     except Exception as e:
