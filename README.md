@@ -12,13 +12,13 @@ flowchart TD
     B --> C["🖼️ RGBA Image (Removed BG & Recentered)"]
     
     subgraph SG ["🔷 Stage 1: Shape Generation (Geometry)"]
-        C --> D["⚡ Hunyuan3D-2mini DiT (Flow Matching)"]
-        D --> E["📦 FlashVDM VAE Latent Decoding"]
-        E -->|Fallback if empty| E_FB["🔄 Standard Volume Decoder"]
+        C --> D["🧊 Hunyuan3D-2.1 DiT (Flow Matching)"]
+        D --> E["📦 Standard VAE Volume Decoding"]
+        E -->|Turbo override| E_FB["⚡ FlashVDM Decoder"]
         E --> F["🧊 Marching Cubes Surface Extractor"]
         E_FB --> F
         F --> G["🧹 Mesh Cleanup (Floater + Degenerate Remover)"]
-        G --> H["📉 Face Decimation (FaceReducer max 40k)"]
+        G --> H["📉 Face Decimation (FaceReducer max 200k)"]
     end
 
     subgraph TG ["🔶 Stage 2: Texture Generation (Paint Turbo)"]
@@ -56,10 +56,10 @@ flowchart TD
 ---
 
 ### 2.2. Sinh hình học 3D (Shape Generation)
-- **Mô hình**: `tencent/Hunyuan3D-2mini` (subfolder: `hunyuan3d-dit-v2-mini-turbo`).
+- **Mô hình mặc định**: `tencent/Hunyuan3D-2.1` (subfolder: `hunyuan3d-dit-v2-1`). Có thể ghi đè bằng `HUNYUAN_SHAPE_MODEL` và `HUNYUAN_SHAPE_SUBFOLDER`.
 - **Cơ chế**:
-  - **Diffusion Transformer (DiT) Flow Matching**: Sinh trường khoảng cách có hướng (SDF / Volume Latents) qua 5-30 bước lấy mẫu.
-  - **FlashVDM (Fast Volume Decoding)**: Giải mã thể tích latent với độ phân giải phân cấp (Octree Resolution $256^3$).
+  - **Diffusion Transformer (DiT) Flow Matching**: Mặc định dùng 50 bước lấy mẫu để ưu tiên độ trung thực hình học.
+  - **Standard Volume Decoder**: Giải mã thể tích ở Octree Resolution $384^3$; FlashVDM chỉ tự bật khi cấu hình một checkpoint Turbo.
   - **Marching Cubes Surface Extraction**: Trích xuất lưới đa giác (Vertices + Triangles) từ lưới mật độ thể tích.
   - **Cơ chế Tự phục hồi (Self-healing Fallback)**: Nếu FlashVDM sinh lưới rỗng (`empty mesh`), hệ thống tự động fallback về Standard Volume Decoder để đảm bảo job luôn trả về hình học hợp lệ.
 
@@ -68,7 +68,7 @@ flowchart TD
 ### 2.3. Hậu xử lý & Tối ưu lưới (Mesh Post-processing)
 - **FloaterRemover**: Quét và loại bỏ các đảo đa giác vụn vặt không liên kết với thân chính.
 - **DegenerateFaceRemover**: Loại bỏ các tam giác diện tích bằng 0 hoặc các cạnh trùng lặp.
-- **FaceReducer (`pymeshlab` Quadric Edge Collapse Decimation)**: Rút gọn số lượng mặt đa giác xuống mức an toàn (mặc định 40,000 faces), tối ưu hóa dung lượng file và độ mượt mà khi hiển thị trên Web/Three.js.
+- **FaceReducer (`pymeshlab` Quadric Edge Collapse Decimation)**: Chỉ rút gọn mesh vượt quá 200,000 faces để giữ chi tiết hình học tốt hơn.
 
 ---
 
@@ -115,83 +115,90 @@ Mô hình sử dụng: `tencent/Hunyuan3D-2` (subfolder: `hunyuan3d-paint-v2-0-t
 | Giai đoạn | Mô hình trên GPU | Bộ nhớ VRAM ước tính | Hành động sau bước |
 | :--- | :--- | :--- | :--- |
 | **1. Khởi tạo & Tiền xử lý** | CPU | ~0 MB GPU | Giữ VRAM trống hoàn toàn |
-| **2. Shape Generation** | DiT + VAE (Hunyuan3D-2mini) | ~6.5 GB | Offload DiT về CPU, gọi `empty_cache()` |
+| **2. Shape Generation** | DiT + VAE (Hunyuan3D-2.1) | Phụ thuộc GPU/runtime | Offload DiT về CPU, gọi `empty_cache()` |
 | **3. Delight Processing** | SD InstructPix2Pix | ~3.5 GB | Offload Delight về CPU, gọi `empty_cache()` |
 | **4. Multiview Diffusion** | UNet2.5D + CLIP (Paint Turbo) | ~6.0 GB (Peak ~14 GB) | Hưởng trọn 100% VRAM trống, offload về CPU |
 | **5. Texture Baking** | Custom CUDA Rasterizer | ~2.5 GB | Giải phóng mesh và dọn dẹp cache |
 
 ---
 
-## 📡 4. Giao thức Gọi API (API Contract)
+## 📡 4. API Reference
 
-### 4.1. Request Payload (`POST /run` hoặc `/runsync`)
+### 4.1. Runpod Serverless
+
+Base URL: `https://api.runpod.ai/v2/{ENDPOINT_ID}`. Mọi request dùng header `Authorization: Bearer {RUNPOD_API_KEY}` và bọc tham số trong object `input`.
+
+| Action | Mục đích | Input riêng | Output chính |
+| :--- | :--- | :--- | :--- |
+| `analyze` | Kiểm tra NSFW | — | Event `result` chứa scores và `is_nsfw` |
+| `caption` | Tạo caption BLIP | `prompt`, `max_new_tokens`, `min_new_tokens` | Event `result` chứa `caption` |
+| `custom_describe` | Phân tích ảnh bằng LLaVA | `prompt`, `model` | Event `result` chứa mô tả Việt/Anh |
+| `generate3d` | Sinh shape, mesh và texture | Các tham số tại mục 4.2 | Chuỗi event và các chunk GLB |
+| `pipeline` | Chạy toàn bộ bốn bước trên | `prompt` và các tham số shape | Kết quả phân tích, sau đó các chunk GLB |
+
+Tất cả action yêu cầu `image_base64` hoặc alias `image`. Giá trị có thể là Base64 thuần hoặc data URI; dung lượng sau decode tối đa 25 MB. Nên dùng `POST /run` rồi đọc `GET /stream/{JOB_ID}` cho `generate3d` và `pipeline`; `/runsync` phù hợp hơn với các action chỉ trả JSON nhỏ.
+
+```bash
+curl -X POST "https://api.runpod.ai/v2/${ENDPOINT_ID}/run" \
+  -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"input":{"action":"analyze","image_base64":"iVBORw0KGgo..."}}'
+```
+
+### 4.2. `generate3d`
+
+| Field | Kiểu | Bắt buộc | Mặc định | Ý nghĩa |
+| :--- | :--- | :---: | :--- | :--- |
+| `action` | string | Có | — | Phải là `generate3d` |
+| `image_base64` / `image` | string | Có | — | Ảnh nguồn Base64 hoặc data URI |
+| `seed` | integer | Không | `1234` | Seed tái lập kết quả |
+| `octree_resolution` | integer | Không | `384` | Độ phân giải giải mã thể tích; tăng giá trị làm tăng thời gian và VRAM |
+| `num_inference_steps` | integer | Không | `50` | Số bước lấy mẫu shape; mặc định là `5` nếu worker được cấu hình với checkpoint Turbo |
+| `guidance_scale` | number | Không | `5.0` | Mức bám theo ảnh nguồn |
+| `face_count` | integer | Không | `200000` | Số faces tối đa sau decimation |
+| `texture` | boolean | Không | `true` | `false` trả mesh trắng, bỏ qua texture pipeline |
+
 ```json
 {
   "input": {
     "action": "generate3d",
     "image_base64": "data:image/png;base64,iVBORw0KGgo...",
-    "octree_resolution": 256,
-    "num_inference_steps": 5,
+    "octree_resolution": 384,
+    "num_inference_steps": 50,
     "guidance_scale": 5.0,
-    "face_count": 40000,
+    "face_count": 200000,
     "texture": true,
     "seed": 1234
   }
 }
 ```
 
-### 4.2. Stream Events (Gửi từ Worker về Client)
-1. **Tiến độ (`progress`)**:
-   ```json
-   {"type": "progress", "stage": "shape_generation", "elapsed_ms": 1240, "vram": {"allocated_mb": 6120.5}}
-   ```
-2. **Metadata file GLB (`file_meta`)**:
-   ```json
-   {"type": "file_meta", "name": "model.glb", "size": 3450124, "chunks": 7, "sha256": "332537496c9d..."}
-   ```
-3. **Phân mảnh dữ liệu (`file_chunk`)**:
-   ```json
-   {"type": "file_chunk", "index": 0, "data": "Z2xURgIAAAB..."}
-   ```
-4. **Hoàn tất (`done`)**:
-   ```json
-   {
-     "type": "done",
-     "timings": {
-       "preprocess_ms": 250,
-       "shape_ms": 3200,
-       "cleanup_ms": 800,
-       "texture_ms": 8500,
-       "export_ms": 400,
-       "total_ms": 13150
-     }
-   }
-   ```
+`texture_resolution` chưa phải tham số có hiệu lực của worker; texture pipeline hiện dùng cấu hình nội bộ 2048 px.
 
-### 4.3. Unified local pipeline
+### 4.3. Stream events và file GLB
 
-`POST /pipeline/process-all` nhận multipart image và prompt tùy chọn, sau đó chạy tuần tự:
+Worker phát các object sau theo thứ tự:
 
-`NSFW → BLIP caption → LLaVA analysis → Hunyuan3D mesh + texture`.
+1. Tiến độ: `{"type":"progress","stage":"shape_generation","elapsed_ms":1240,"vram":{"allocated_mb":6120.5}}`
+2. Metadata: `{"type":"file_meta","name":"model.glb","size":3450124,"chunks":7,"sha256":"332537496c9d..."}`
+3. Một hoặc nhiều chunk: `{"type":"file_chunk","index":0,"data":"Z2xURgIAAAB..."}`
+4. Hoàn tất: `{"type":"done","timings":{"shape_ms":3200,"cleanup_ms":800,"texture_ms":8500,"total_ms":13150}}`
 
-```bash
-curl -X POST http://127.0.0.1:4000/pipeline/process-all \
-  -F "image=@chair.png" \
-  -F "prompt=Phân tích vật liệu và hình khối để dựng 3D"
-```
+Sắp xếp `file_chunk` theo `index`, decode Base64 rồi nối byte; kiểm tra kích thước và SHA-256 bằng event `file_meta`. Khi thất bại worker phát `{"type":"error","stage":"execution","error":"...","timings":{"total_ms":100}}` thay vì file.
 
-Nếu ảnh vi phạm NSFW, gateway trả HTTP 400 và không gọi ba model còn lại. Khi thành công, response chứa metadata cùng `glb_url`; tải model qua `GET /pipeline/result/{task_id}.glb`.
+Các stage chính của `generate3d`: `decode_input`, `worker_init`, `preprocess`, `shape_generation`, `mesh_cleanup`, `loading_texture_pipeline`, `texture_generation`, `glb_export`. Với action `pipeline`, stage được thêm prefix `moderation.`, `caption.`, `analysis.` hoặc `generate3d.`.
 
 ### 4.4. Unified pipeline trên Runpod
-
-Endpoint queue hiện tại hỗ trợ thêm action `pipeline`, chạy tuần tự cùng luồng trên trong một job và stream metadata cùng các chunk GLB về client:
 
 ```json
 {
   "input": {
     "action": "pipeline",
     "image_base64": "data:image/png;base64,iVBORw0KGgo...",
-    "prompt": "Phân tích vật liệu và hình khối để dựng 3D"
+    "prompt": "Phân tích vật liệu và hình khối để dựng 3D",
+    "octree_resolution": 384,
+    "num_inference_steps": 50,
+    "face_count": 200000
   },
   "policy": {
     "executionTimeout": 1200000,
@@ -200,7 +207,47 @@ Endpoint queue hiện tại hỗ trợ thêm action `pipeline`, chạy tuần t�
 }
 ```
 
-Gửi payload tới `POST https://api.runpod.ai/v2/{ENDPOINT_ID}/run`, rồi đọc tiến độ qua `/stream/{JOB_ID}`. Ảnh NSFW dừng ngay trước các bước caption, phân tích và dựng 3D. Texture được bật cố định ở độ phân giải 1024 cho action này.
+Luồng xử lý là `NSFW → BLIP → LLaVA → Hunyuan3D`. Texture luôn được bật cho action này; ảnh NSFW tạo event `error` ở stage `moderation` và dừng trước các model còn lại.
+
+### 4.5. Local Gateway
+
+Base URL mặc định: `http://127.0.0.1:4000`. FastAPI cung cấp Swagger UI tại `/docs`.
+
+| Method | Path | Input | Response |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/health` | — | `{"ok":true}` |
+| `POST` | `/analyze` | multipart `image` | JSON kết quả NSFW |
+| `POST` | `/caption` | multipart `image`; form `prompt`, `max_new_tokens`, `min_new_tokens` | JSON caption |
+| `POST` | `/custom_describe` | multipart `image`; form `prompt` | JSON mô tả |
+| `POST` | `/generate3d` | multipart `image` | Binary `model/gltf-binary` |
+| `POST` | `/pipeline/process-all` | JPEG/PNG multipart `image` ≤ 20 MB; form `prompt` tùy chọn | JSON chứa `task_id` và `glb_url` |
+| `GET` | `/pipeline/result/{task_id}.glb` | UUID từ pipeline | Binary GLB |
+
+`/generate3d` của local gateway chưa expose các tham số quality; nó dùng mặc định của backend 3D. Pipeline đầy đủ:
+
+```bash
+curl -X POST http://127.0.0.1:4000/pipeline/process-all \
+  -F "image=@chair.png" \
+  -F "prompt=Phân tích vật liệu và hình khối để dựng 3D"
+```
+
+```json
+{
+  "ok": true,
+  "task_id": "936da01f-9abd-4d9d-80c7-02af85c822a8",
+  "results": {
+    "moderation": {"ok": true, "is_nsfw": false},
+    "description": {"caption": "a wooden chair"},
+    "rich_prompt": "Ghế gỗ sồi, bốn chân tròn",
+    "model_3d": {
+      "status": "success",
+      "glb_url": "/pipeline/result/936da01f-9abd-4d9d-80c7-02af85c822a8.glb"
+    }
+  }
+}
+```
+
+Các lỗi gateway thường gặp: `400` ảnh rỗng hoặc bị chặn NSFW, `413` quá 20 MB, `415` không phải JPEG/PNG, `404` không tìm thấy GLB và `502` service phía sau lỗi.
 
 ---
 
@@ -210,7 +257,7 @@ Gửi payload tới `POST https://api.runpod.ai/v2/{ENDPOINT_ID}/run`, rồi đ�
 ```bash
 python -m pytest test_handler.py test_gateway.py -v
 ```
-*(Bao gồm 19 unit tests cho worker, unified gateway, texture fallback, Base64, chunking và checksum.)*
+*(Bao gồm 22 unit tests cho worker, unified gateway, texture fallback, Base64, chunking và checksum.)*
 
 ### 5.2. Chạy Giao diện Test Web Trực quan
 Mở trực tiếp file [`test_local_serverless.html`](file:///f:/codingSpace/Asm/3d_hunyuan_be/test_local_serverless.html) trong trình duyệt để nhập **Runpod API Key** và **Endpoint ID**, kéo thả ảnh và xem 3D Mesh xoay 360 độ theo thời gian thực.

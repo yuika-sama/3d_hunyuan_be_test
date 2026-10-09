@@ -1,7 +1,7 @@
 """
 Preload helper for Runpod Serverless Worker.
 Pre-downloads rembg and Hunyuan3D model weights to local cache.
-Ensures only needed safetensors files are fetched.
+Ensures only the selected shape checkpoint is fetched.
 """
 import os
 import sys
@@ -13,6 +13,9 @@ os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "600"
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 HUNYUAN_DIR = os.path.join(CURRENT_DIR, "3d_generative", "Hunyuan3D-2-main")
+HUNYUAN_SHAPE_MODEL = os.getenv("HUNYUAN_SHAPE_MODEL", "tencent/Hunyuan3D-2.1")
+HUNYUAN_SHAPE_SUBFOLDER = os.getenv("HUNYUAN_SHAPE_SUBFOLDER", "hunyuan3d-dit-v2-1")
+HUNYUAN_SHAPE_USE_SAFETENSORS = not HUNYUAN_SHAPE_MODEL.endswith("Hunyuan3D-2.1")
 if HUNYUAN_DIR not in sys.path:
     sys.path.insert(0, HUNYUAN_DIR)
 
@@ -58,13 +61,13 @@ def preload(full_texture: bool = False):
     except Exception as e:
         print(f"[PRELOAD WARNING] BackgroundRemover failed: {e}")
 
-    print("[PRELOAD] 2/3 Checking / downloading Hunyuan3D shape model (safetensors only)...")
+    print("[PRELOAD] 2/3 Checking / downloading Hunyuan3D shape model...")
     try:
         from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
         Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
-            "tencent/Hunyuan3D-2mini",
-            subfolder="hunyuan3d-dit-v2-mini-turbo",
-            use_safetensors=True,
+            HUNYUAN_SHAPE_MODEL,
+            subfolder=HUNYUAN_SHAPE_SUBFOLDER,
+            use_safetensors=HUNYUAN_SHAPE_USE_SAFETENSORS,
             device="cpu",
         )
         print("[PRELOAD] Hunyuan3D shape model ready.")

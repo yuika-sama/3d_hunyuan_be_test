@@ -250,7 +250,8 @@ class TestRunpodHandler(unittest.TestCase):
         mock_shapegen = MagicMock()
         mock_shapegen.FloaterRemover = MagicMock(return_value=lambda m: m)
         mock_shapegen.DegenerateFaceRemover = MagicMock(return_value=lambda m: m)
-        mock_shapegen.FaceReducer = MagicMock(return_value=lambda m, max_facenum: m)
+        mock_face_reducer = MagicMock(side_effect=lambda m, max_facenum: m)
+        mock_shapegen.FaceReducer = MagicMock(return_value=mock_face_reducer)
 
         with patch.dict(
             "sys.modules",
@@ -298,6 +299,11 @@ class TestRunpodHandler(unittest.TestCase):
         done_event = next(e for e in events if e.get("type") == "done")
         self.assertIn("timings", done_event)
         self.assertIn("total_ms", done_event["timings"])
+
+        shape_args = mock_shape_pipe.call_args.kwargs
+        self.assertEqual(shape_args["octree_resolution"], 384)
+        self.assertEqual(shape_args["num_inference_steps"], 50)
+        mock_face_reducer.assert_called_once_with(mock_mesh, max_facenum=200000)
 
     @patch.object(runpod_handler.model_manager, "load_hunyuan")
     @patch.object(runpod_handler.model_manager, "move_tex_pipeline")
@@ -352,6 +358,7 @@ class TestRunpodHandler(unittest.TestCase):
         mock_offload.assert_called_once()
         mock_tex_pipe.assert_called_once()
 
+    @patch.object(runpod_handler, "HUNYUAN_USE_FLASHVDM", True)
     @patch.object(runpod_handler.model_manager, "load_hunyuan")
     def test_handler_generate3d_fallback_on_flashvdm_empty_mesh(
         self, mock_load_hunyuan

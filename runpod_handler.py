@@ -88,9 +88,15 @@ OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL_NAME = os.getenv("OLLAMA_MODEL_NAME", "llava:7b")
 BLIP_MODEL_NAME = os.getenv("BLIP_MODEL_NAME", "Salesforce/blip-image-captioning-large")
 NSFW_MODEL_NAME = os.getenv("NSFW_MODEL_NAME", "strangerguardhf/nsfw_image_detection")
-HUNYUAN_SHAPE_MODEL = os.getenv("HUNYUAN_SHAPE_MODEL", "tencent/Hunyuan3D-2mini")
-HUNYUAN_SHAPE_SUBFOLDER = os.getenv("HUNYUAN_SHAPE_SUBFOLDER", "hunyuan3d-dit-v2-mini-turbo")
+HUNYUAN_SHAPE_MODEL = os.getenv("HUNYUAN_SHAPE_MODEL", "tencent/Hunyuan3D-2.1")
+HUNYUAN_SHAPE_SUBFOLDER = os.getenv("HUNYUAN_SHAPE_SUBFOLDER", "hunyuan3d-dit-v2-1")
 HUNYUAN_TEX_MODEL = os.getenv("HUNYUAN_TEX_MODEL", "tencent/Hunyuan3D-2")
+HUNYUAN_SHAPE_USE_SAFETENSORS = not HUNYUAN_SHAPE_MODEL.endswith("Hunyuan3D-2.1")
+HUNYUAN_USE_FLASHVDM = "turbo" in HUNYUAN_SHAPE_SUBFOLDER.lower()
+
+DEFAULT_OCTREE_RESOLUTION = 384
+DEFAULT_INFERENCE_STEPS = 5 if HUNYUAN_USE_FLASHVDM else 50
+DEFAULT_FACE_COUNT = 200000
 
 # Chunk size for GLB streaming: 512 KiB raw data per chunk
 CHUNK_SIZE_BYTES = 512 * 1024
@@ -236,14 +242,15 @@ class ModelManager:
             shape_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
                 HUNYUAN_SHAPE_MODEL,
                 subfolder=HUNYUAN_SHAPE_SUBFOLDER,
-                use_safetensors=True,
+                use_safetensors=HUNYUAN_SHAPE_USE_SAFETENSORS,
                 device="cpu",
             )
-            try:
-                topk = "merge" if "mini" in HUNYUAN_SHAPE_MODEL.lower() else "mean"
-                shape_pipeline.enable_flashvdm(topk_mode=topk, mc_algo="mc")
-            except Exception as e:
-                logger.warning(f"Could not enable flashvdm: {e}")
+            if HUNYUAN_USE_FLASHVDM:
+                try:
+                    topk = "merge" if "mini" in HUNYUAN_SHAPE_MODEL.lower() else "mean"
+                    shape_pipeline.enable_flashvdm(topk_mode=topk, mc_algo="mc")
+                except Exception as e:
+                    logger.warning(f"Could not enable flashvdm: {e}")
             self.hunyuan_worker["shape_pipeline"] = shape_pipeline
 
         clean_vram()
@@ -562,10 +569,10 @@ def handle_generate3d(
     pil_img, _ = decode_base64_image(img_str)
 
     seed = int(job_input.get("seed", 1234))
-    octree_res = int(job_input.get("octree_resolution", 256))
-    steps = int(job_input.get("num_inference_steps", 5))
+    octree_res = int(job_input.get("octree_resolution", DEFAULT_OCTREE_RESOLUTION))
+    steps = int(job_input.get("num_inference_steps", DEFAULT_INFERENCE_STEPS))
     guidance = float(job_input.get("guidance_scale", 5.0))
-    face_count = int(job_input.get("face_count", 40000))
+    face_count = int(job_input.get("face_count", DEFAULT_FACE_COUNT))
     enable_texture = bool(job_input.get("texture", True))
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -638,11 +645,10 @@ def handle_generate3d(
 
     # Fallback to standard volume decoding if FlashVDM produced empty mesh or failed
     if not _is_mesh_valid(mesh):
-        logger.warning(
-            "FlashVDM generated empty mesh or failed. Falling back to standard volume decoder..."
-        )
+        logger.warning("Shape generation returned an empty mesh; retrying once with the standard decoder...")
         try:
-            shape_pipeline.enable_flashvdm(enabled=False)
+            if HUNYUAN_USE_FLASHVDM:
+                shape_pipeline.enable_flashvdm(enabled=False)
             gen_dev = device if (torch.cuda.is_available() and str(device).startswith("cuda")) else "cpu"
             generator = torch.Generator(device=gen_dev).manual_seed(seed)
             outputs = shape_pipeline(
@@ -658,11 +664,12 @@ def handle_generate3d(
         except Exception as e2:
             logger.error(f"Fallback shape generation also failed: {e2}")
         finally:
-            try:
-                topk = "merge" if "mini" in HUNYUAN_SHAPE_MODEL.lower() else "mean"
-                shape_pipeline.enable_flashvdm(topk_mode=topk, mc_algo="mc")
-            except Exception:
-                pass
+            if HUNYUAN_USE_FLASHVDM:
+                try:
+                    topk = "merge" if "mini" in HUNYUAN_SHAPE_MODEL.lower() else "mean"
+                    shape_pipeline.enable_flashvdm(topk_mode=topk, mc_algo="mc")
+                except Exception:
+                    pass
 
     logger.info("Offloading shape pipeline back to CPU...")
     shape_pipeline.to("cpu")

@@ -1,5 +1,7 @@
 # Kế hoạch triển khai dự án lên Runpod Serverless
 
+> Tài liệu này lưu thiết kế triển khai ban đầu. API contract hiện hành và các mặc định shape/mesh mới nằm trong mục **API Reference** của [`README.md`](../README.md#-4-api-reference).
+
 ## 1. Mục tiêu và phạm vi
 
 Đưa toàn bộ bốn chức năng hiện tại vào **một Runpod Serverless endpoint**:
@@ -103,7 +105,7 @@ Giữ nguyên các tham số Hunyuan hiện tại:
 - Octree resolution: `256`.
 - Inference steps: `5`.
 - Guidance scale: `5`.
-- Face reduction: mặc định khoảng `40000` theo server hiện tại.
+- Face reduction: mặc định tối đa `200000` để giữ chi tiết hình học.
 
 Các đường dẫn Windows cố định trong mã hiện tại phải được đổi thành đường dẫn Linux hoặc thư mục tạm do Python tạo.
 
@@ -144,7 +146,7 @@ Nhược điểm:
 
 Chọn **Hugging Face + Runpod Cached Models**, không dùng Network Volume trong giai đoạn đồ án.
 
-- Hunyuan3D dùng repository chính chủ Tencent, không dùng bản cộng đồng: `tencent/Hunyuan3D-2mini` và model/subfolder đúng với code hiện tại.
+- Hunyuan3D dùng repository chính chủ Tencent, không dùng bản cộng đồng: mặc định `tencent/Hunyuan3D-2.1` / `hunyuan3d-dit-v2-1`.
 - BLIP dùng `Salesforce/blip-image-captioning-large`.
 - NSFW dùng `strangerguardhf/nsfw_image_detection`.
 - Tất cả tham chiếu phải pin theo commit SHA sau khi xác nhận phiên bản đang chạy tốt.
@@ -369,5 +371,5 @@ Thứ tự này tránh debug đồng thời code, Docker, Runpod và CI/CD.
 - [Runpod pricing](https://www.runpod.io/pricing)
 - [Runpod REST API specification](https://rest.runpod.io/v1/openapi.json)
 - [Tencent Hunyuan3D-2 repository](https://github.com/Tencent-Hunyuan/Hunyuan3D-2)
-- [Tencent Hunyuan3D-2mini on Hugging Face](https://huggingface.co/tencent/Hunyuan3D-2mini)
+- [Tencent Hunyuan3D-2.1 on Hugging Face](https://huggingface.co/tencent/Hunyuan3D-2.1)
 
