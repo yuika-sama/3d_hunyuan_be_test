@@ -12,7 +12,7 @@ os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "600"
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-HUNYUAN_DIR = os.path.join(CURRENT_DIR, "3dgen", "Hunyuan3D-2-main")
+HUNYUAN_DIR = os.path.join(CURRENT_DIR, "3d_generative", "Hunyuan3D-2-main")
 if HUNYUAN_DIR not in sys.path:
     sys.path.insert(0, HUNYUAN_DIR)
 
@@ -76,10 +76,7 @@ def preload(full_texture: bool = False):
         try:
             from hy3dgen.texgen import Hunyuan3DPaintPipeline
             tex_pipeline = Hunyuan3DPaintPipeline.from_pretrained("tencent/Hunyuan3D-2")
-            if hasattr(tex_pipeline, "models"):
-                for m in tex_pipeline.models.values():
-                    if hasattr(m, "pipeline") and m.pipeline is not None:
-                        m.pipeline.to("cpu")
+            tex_pipeline.to("cpu")
             print("[PRELOAD] Hunyuan3D texture model ready.")
         except Exception as e:
             print(f"[PRELOAD WARNING] Hunyuan3D texture model failed during preload: {e}")

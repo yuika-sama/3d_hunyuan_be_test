@@ -33,12 +33,14 @@ class Light_Shadow_Remover():
         pipeline.scheduler = EulerAncestralDiscreteScheduler.from_config(pipeline.scheduler.config)
         pipeline.set_progress_bar_config(disable=True)
 
-        self.pipeline = pipeline.to(self.device, torch.float16)
+        self.pipeline = pipeline
+        self.to(self.device)
 
     def to(self, device):
         self.device = device
         if hasattr(self, 'pipeline') and self.pipeline is not None:
-            self.pipeline.to(device, torch.float16)
+            dtype = torch.float16 if torch.device(device).type == 'cuda' else torch.float32
+            self.pipeline.to(device, dtype)
         return self
     
     def recorrect_rgb(self, src_image, target_image, alpha_channel, scale=0.95):

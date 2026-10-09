@@ -63,7 +63,7 @@ except ImportError:
 
 # Ensure hy3dgen in subfolder can be imported if not installed in site-packages
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-HUNYUAN_DIR = os.path.join(CURRENT_DIR, "3dgen", "Hunyuan3D-2-main")
+HUNYUAN_DIR = os.path.join(CURRENT_DIR, "3d_generative", "Hunyuan3D-2-main")
 if HUNYUAN_DIR not in sys.path:
     sys.path.insert(0, HUNYUAN_DIR)
 
@@ -251,24 +251,7 @@ class ModelManager:
     @staticmethod
     def offload_tex_pipeline(tex_pipeline):
         """Offload Hunyuan3DPaintPipeline sub-models to CPU and clean VRAM."""
-        if tex_pipeline is not None:
-            if hasattr(tex_pipeline, "to"):
-                try:
-                    tex_pipeline.to("cpu")
-                except Exception as e:
-                    logger.warning(f"Failed to offload tex_pipeline to CPU: {e}")
-            if hasattr(tex_pipeline, "models"):
-                for model_name, model_obj in tex_pipeline.models.items():
-                    if hasattr(model_obj, "to"):
-                        try:
-                            model_obj.to("cpu")
-                        except Exception as e:
-                            logger.warning(f"Failed to offload {model_name} to CPU: {e}")
-                    elif hasattr(model_obj, "pipeline") and model_obj.pipeline is not None:
-                        try:
-                            model_obj.pipeline.to("cpu")
-                        except Exception as e:
-                            logger.warning(f"Failed to offload {model_name} to CPU: {e}")
+        ModelManager.move_tex_pipeline(tex_pipeline, "cpu")
         clean_vram()
 
     @staticmethod
@@ -278,6 +261,7 @@ class ModelManager:
             if hasattr(tex_pipeline, "to"):
                 try:
                     tex_pipeline.to(device)
+                    return
                 except Exception as e:
                     logger.warning(f"Failed to move tex_pipeline to {device}: {e}")
             if hasattr(tex_pipeline, "models"):

@@ -11,7 +11,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     MAX_JOBS="1" \
     HF_HUB_DISABLE_XET="1" \
     HF_HUB_ENABLE_HF_TRANSFER="0" \
-    PYTHONPATH="/app:/app/3dgen/Hunyuan3D-2-main"
+    PYTHONPATH="/app:/app/3d_generative/Hunyuan3D-2-main"
 
 # Install Python 3.10 and necessary system packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -65,12 +65,12 @@ RUN pip3 install --no-cache-dir -r /app/requirements-runpod.txt && \
     rm -rf /root/.cache/pip
 
 # Copy Hunyuan3D-2 codebase and compile C++/CUDA native rasterizers
-COPY 3dgen/Hunyuan3D-2-main /app/3dgen/Hunyuan3D-2-main
+COPY 3d_generative/Hunyuan3D-2-main /app/3d_generative/Hunyuan3D-2-main
 
-RUN pip3 install --no-cache-dir --no-deps -e /app/3dgen/Hunyuan3D-2-main && \
-    cd /app/3dgen/Hunyuan3D-2-main/hy3dgen/texgen/custom_rasterizer && \
+RUN pip3 install --no-cache-dir --no-deps -e /app/3d_generative/Hunyuan3D-2-main && \
+    cd /app/3d_generative/Hunyuan3D-2-main/hy3dgen/texgen/custom_rasterizer && \
     python3 setup.py install && \
-    cd /app/3dgen/Hunyuan3D-2-main/hy3dgen/texgen/differentiable_renderer && \
+    cd /app/3d_generative/Hunyuan3D-2-main/hy3dgen/texgen/differentiable_renderer && \
     python3 setup.py install && \
     rm -rf /root/.cache/pip
 

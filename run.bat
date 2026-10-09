@@ -14,7 +14,7 @@ REM --- Start BLIP Captioning (Port 5002) ---
 start cmd /k "cd blip-image-captioning-api-main && uvicorn app.main:app --host 0.0.0.0 --port 5002"
 
 REM --- Start Hunyuan3D (Port 5003) ---
-start cmd /k "cd 3dgen/Hunyuan3D-2-main && python api_server_backup.py --host 0.0.0.0 --port 5003 --enable_tex"
+start cmd /k "cd 3d_generative/Hunyuan3D-2-main && python api_server_backup.py --host 0.0.0.0 --port 5003 --enable_tex"
 
 REM --- Start Custom Ollama Service (Port 5004) ---
 start cmd /k "cd advance-image-to-text && python ollama_service.py"

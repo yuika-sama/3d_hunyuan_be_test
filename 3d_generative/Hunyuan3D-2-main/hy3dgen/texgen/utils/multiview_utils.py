@@ -51,12 +51,14 @@ class Multiview_Diffusion_Net():
             # pipeline.prepare() 
 
         pipeline.set_progress_bar_config(disable=True)
-        self.pipeline = pipeline.to(self.device)
+        self.pipeline = pipeline
+        self.to(self.device)
 
     def to(self, device):
         self.device = device
         if hasattr(self, 'pipeline') and self.pipeline is not None:
-            self.pipeline.to(device)
+            dtype = torch.float16 if torch.device(device).type == 'cuda' else torch.float32
+            self.pipeline.to(device, dtype)
         return self
 
     def seed_everything(self, seed):

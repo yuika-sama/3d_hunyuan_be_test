@@ -438,7 +438,7 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertIn("refusing to return an untextured model", error_event["error"])
 
     def test_model_manager_tex_pipeline_offload_and_move(self):
-        """Test ModelManager.move_tex_pipeline and offload_tex_pipeline with to() method and submodels."""
+        """Move the owning pipeline once; it recursively moves its submodels."""
         mock_pipe = MagicMock()
         mock_submodel_1 = MagicMock()
         mock_submodel_2 = MagicMock()
@@ -450,18 +450,18 @@ class TestRunpodHandler(unittest.TestCase):
         # Test move
         runpod_handler.ModelManager.move_tex_pipeline(mock_pipe, "cuda")
         mock_pipe.to.assert_called_with("cuda")
-        mock_submodel_1.to.assert_called_with("cuda")
-        mock_submodel_2.to.assert_called_with("cuda")
+        mock_submodel_1.to.assert_not_called()
+        mock_submodel_2.to.assert_not_called()
 
         # Test offload
         runpod_handler.ModelManager.offload_tex_pipeline(mock_pipe)
         mock_pipe.to.assert_called_with("cpu")
-        mock_submodel_1.to.assert_called_with("cpu")
-        mock_submodel_2.to.assert_called_with("cpu")
+        mock_submodel_1.to.assert_not_called()
+        mock_submodel_2.to.assert_not_called()
 
     def test_texture_loader_uses_repository_weight_formats(self):
         """Keep the mixed Hunyuan texture checkpoint formats explicit."""
-        root = Path(__file__).parent / "3dgen/Hunyuan3D-2-main/hy3dgen/texgen"
+        root = Path(__file__).parent / "3d_generative/Hunyuan3D-2-main/hy3dgen/texgen"
         cache_source = (root / "pipelines.py").read_text(encoding="utf-8")
         component_source = (root / "utils/multiview_utils.py").read_text(encoding="utf-8")
         unet_source = (root / "hunyuanpaint/unet/modules.py").read_text(encoding="utf-8")
@@ -473,17 +473,25 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertIn("custom_pipeline=custom_pipeline_path", component_source)
         self.assertNotIn("**components", component_source)
         self.assertIn("UNet2p5DConditionModel.forward.__get__", component_source)
+        self.assertIn("ref_scale_timing = ref_scale", unet_source)
 
     def test_paint_pipeline_device_matching(self):
         """Ensure texture pipeline aligns tensor devices and verifies file sizes."""
-        root = Path(__file__).parent / "3dgen/Hunyuan3D-2-main/hy3dgen/texgen"
+        root = Path(__file__).parent / "3d_generative/Hunyuan3D-2-main/hy3dgen/texgen"
         pipeline_source = (root / "hunyuanpaint/pipeline.py").read_text(encoding="utf-8")
         cache_source = (root / "pipelines.py").read_text(encoding="utf-8")
+        component_source = (root / "utils/multiview_utils.py").read_text(encoding="utf-8")
+        delight_source = (root / "utils/dehighlight_utils.py").read_text(encoding="utf-8")
+        preload_source = (Path(__file__).parent / "preload_models.py").read_text(encoding="utf-8")
 
         self.assertIn("images = images.to(device=device, dtype=dtype)", pipeline_source)
         self.assertIn(".to(device)", pipeline_source)
         self.assertNotIn('.to("cuda")', pipeline_source)
         self.assertIn("os.path.getsize(os.path.join(root, path)) > 1000", cache_source)
+        self.assertIn("else torch.float32", component_source)
+        self.assertIn("else torch.float32", delight_source)
+        self.assertIn('tex_pipeline.to("cpu")', preload_source)
+        self.assertNotIn('m.pipeline.to("cpu")', preload_source)
 
 
 if __name__ == "__main__":

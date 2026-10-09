@@ -15,11 +15,10 @@
 import copy
 import json
 import os
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from diffusers.models import UNet2DConditionModel
 from diffusers.models.attention_processor import Attention
 from diffusers.models.transformers.transformer_2d import BasicTransformerBlock
@@ -191,12 +190,11 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
                 attention_mask=None,
                 **cross_attention_kwargs
             )
-            if not self.is_turbo:
-                ref_scale_timing = ref_scale
-                if isinstance(ref_scale, torch.Tensor):
-                    ref_scale_timing = ref_scale.unsqueeze(1).repeat(1, num_in_batch).view(-1)
-                    for _ in range(attn_output.ndim - 1):
-                        ref_scale_timing = ref_scale_timing.unsqueeze(-1)
+            ref_scale_timing = ref_scale
+            if isinstance(ref_scale, torch.Tensor):
+                ref_scale_timing = ref_scale.unsqueeze(1).repeat(1, num_in_batch).view(-1)
+                for _ in range(attn_output.ndim - 1):
+                    ref_scale_timing = ref_scale_timing.unsqueeze(-1)
                         
             hidden_states = ref_scale_timing * attn_output + hidden_states
 

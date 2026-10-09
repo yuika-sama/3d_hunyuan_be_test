@@ -168,15 +168,29 @@ Mô hình sử dụng: `tencent/Hunyuan3D-2` (subfolder: `hunyuan3d-paint-v2-0-t
    }
    ```
 
+### 4.3. Unified local pipeline
+
+`POST /pipeline/process-all` nhận multipart image và prompt tùy chọn, sau đó chạy tuần tự:
+
+`NSFW → BLIP caption → LLaVA analysis → Hunyuan3D mesh + texture`.
+
+```bash
+curl -X POST http://127.0.0.1:4000/pipeline/process-all \
+  -F "image=@chair.png" \
+  -F "prompt=Phân tích vật liệu và hình khối để dựng 3D"
+```
+
+Nếu ảnh vi phạm NSFW, gateway trả HTTP 400 và không gọi ba model còn lại. Khi thành công, response chứa metadata cùng `glb_url`; tải model qua `GET /pipeline/result/{task_id}.glb`.
+
 ---
 
 ## 🧪 5. Kiểm thử & Chạy thử Nghiệm
 
 ### 5.1. Chạy Unit Tests
 ```bash
-python -m pytest test_handler.py -v
+python -m pytest test_handler.py test_gateway.py -v
 ```
-*(Bao gồm 15 unit tests kiểm thử độc lập cho từng luồng: shape generation, texture pipeline fallback, Base64 parser, chunking, sha256 checksum, v.v.)*
+*(Bao gồm 20 unit tests cho worker, unified gateway, texture fallback, Base64, chunking và checksum.)*
 
 ### 5.2. Chạy Giao diện Test Web Trực quan
 Mở trực tiếp file [`test_local_serverless.html`](file:///f:/codingSpace/Asm/3d_hunyuan_be/test_local_serverless.html) trong trình duyệt để nhập **Runpod API Key** và **Endpoint ID**, kéo thả ảnh và xem 3D Mesh xoay 360 độ theo thời gian thực.
