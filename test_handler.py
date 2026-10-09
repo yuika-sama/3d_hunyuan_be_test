@@ -81,14 +81,15 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertEqual(reconstructed, test_data)
         self.assertEqual(reconstructed_hash, original_hash)
 
-    @patch("huggingface_hub.snapshot_download")
-    def test_shape_preload_downloads_checkpoint_without_loading_model(self, mock_download):
-        with patch.object(preload_models, "HUNYUAN_SHAPE_MODEL", "tencent/Hunyuan3D-2.1"), \
+    def test_shape_preload_downloads_checkpoint_without_loading_model(self):
+        mock_huggingface_hub = MagicMock()
+        with patch.dict("sys.modules", {"huggingface_hub": mock_huggingface_hub}), \
+             patch.object(preload_models, "HUNYUAN_SHAPE_MODEL", "tencent/Hunyuan3D-2.1"), \
              patch.object(preload_models, "HUNYUAN_SHAPE_SUBFOLDER", "hunyuan3d-dit-v2-1"), \
              patch.object(preload_models, "HUNYUAN_SHAPE_USE_SAFETENSORS", False):
             preload_models.preload_shape_checkpoint()
 
-        kwargs = mock_download.call_args.kwargs
+        kwargs = mock_huggingface_hub.snapshot_download.call_args.kwargs
         self.assertEqual(kwargs["repo_id"], "tencent/Hunyuan3D-2.1")
         self.assertIn("hunyuan3d-dit-v2-1/*.ckpt", kwargs["allow_patterns"])
 
