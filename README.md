@@ -8,11 +8,14 @@ Hệ thống dịch vụ chuyển đổi hình ảnh 2D thành mô hình 3D hoà
 
 ```mermaid
 flowchart TD
-    A["📸 2D Image Input (Base64)"] --> B["✂️ Preprocessing: rembg (U2-Net)"]
-    B --> C["🖼️ RGBA Image (Removed BG & Recentered)"]
+    A["📸 2D Image Input (Base64)"] --> B{"Ảnh đã có alpha?"}
+    B -->|Có| C["Giữ nguyên silhouette RGBA"]
+    B -->|Không| B2["✂️ rembg (U2-Net)"]
+    B2 --> C
+    C --> C2["🖼️ Recenter + viền an toàn"]
     
     subgraph SG ["🔷 Stage 1: Shape Generation (Geometry)"]
-        C --> D["🧊 Hunyuan3D-2.1 DiT (Flow Matching)"]
+        C2 --> D["🧊 Hunyuan3D-2.1 DiT (Flow Matching)"]
         D --> E["📦 Standard VAE Volume Decoding"]
         E -->|Turbo override| E_FB["⚡ FlashVDM Decoder"]
         E --> F["🧊 Marching Cubes Surface Extractor"]
@@ -46,11 +49,27 @@ flowchart TD
 
 ## 🔍 2. Chi tiết Từng Giai đoạn Xử lý
 
+### Các lớp của Unified pipeline và ảnh hưởng dây chuyền
+
+| Lớp | Mục đích | Dữ liệu chuyển sang lớp sau / ảnh hưởng tới 3D |
+| :--- | :--- | :--- |
+| NSFW (`analyze`) | Chặn ảnh không phù hợp trước khi dùng các model nặng | Nếu bị chặn, toàn bộ pipeline dừng. Nếu đạt, ảnh gốc đi tiếp; score không đổi shape. |
+| BLIP (`caption`) | Tạo caption ngắn để LLaVA có thêm ngữ cảnh | Caption được ghép vào prompt của LLaVA; không được truyền vào Hunyuan3D. |
+| LLaVA (`custom_describe`) | Sinh mô tả giàu thông tin cho API/người dùng | Trả `rich_prompt`; hiện chỉ là metadata, không điều khiển geometry hay texture. |
+| Alpha/rembg + recenter | Tách silhouette, căn vật thể giữa khung 512×512 | Đây là đầu vào trực tiếp của shape model; mất tai/chân ở mask thì các lớp sau không thể khôi phục. PNG đã có alpha được giữ nguyên để tránh tách nền lần hai. |
+| Shape DiT | Suy diễn latent 3D từ một ảnh | Quyết định cấu trúc lớn và các mặt khuất; seed, steps và guidance tác động tại đây. |
+| VAE + Marching Cubes | Giải latent thành bề mặt tam giác | `octree_resolution` quyết định độ mịn không gian; không thể tạo lại chi tiết mà DiT không sinh. |
+| Mesh cleanup | Bỏ mặt lỗi/đảo nhỏ rồi giới hạn số face | Làm mesh ổn định cho texture; decimation quá thấp có thể làm cùn tai, móng và đuôi. |
+| Texture pipeline | Trải UV, tạo sáu view, bake và inpaint màu | Chỉ đổi vật liệu/màu trên mesh có sẵn, không sửa hình học bị thiếu. |
+| GLB export/stream | Đóng gói mesh + texture, checksum và chia chunk | Không đổi nội dung 3D; chỉ ảnh hưởng cách client nhận và kiểm tra file. |
+
+Vì Hunyuan shape hiện là image-conditioned, `prompt`, BLIP và LLaVA không thể sửa một cái tai bị thiếu. Hai đầu vào quyết định trực tiếp nhất là silhouette sau tiền xử lý và checkpoint/seed của Shape DiT.
+
 ### 2.1. Tiền xử lý ảnh (Preprocessing & Background Removal)
 - **Model**: `BackgroundRemover` (`u2net.onnx` qua ONNX Runtime).
 - **Quy trình**:
-  1. Giải mã chuỗi Base64 / Data URI thành ảnh PIL RGB.
-  2. Tách đối tượng chính khỏi phông nền (Alpha matting).
+  1. Giải mã chuỗi Base64 / Data URI thành ảnh PIL RGB hoặc RGBA.
+  2. Nếu ảnh đã có alpha hợp lệ thì giữ nguyên; chỉ chạy tách nền khi ảnh còn đục hoàn toàn.
   3. Cắt gọn biên thừa và căn giữa (`recenter_image`) trong khung vuông với viền đệm an toàn.
 
 ---
@@ -257,7 +276,7 @@ Các lỗi gateway thường gặp: `400` ảnh rỗng hoặc bị chặn NSFW, 
 ```bash
 python -m pytest test_handler.py test_gateway.py -v
 ```
-*(Bao gồm 23 unit tests cho worker, model preload, unified gateway, texture fallback, Base64, chunking và checksum.)*
+*(Bao gồm 24 unit tests cho worker, model preload, unified gateway, texture fallback, Base64, chunking và checksum.)*
 
 ### 5.2. Chạy Giao diện Test Web Trực quan
 Mở trực tiếp file [`test_local_serverless.html`](file:///f:/codingSpace/Asm/3d_hunyuan_be/test_local_serverless.html) trong trình duyệt để nhập **Runpod API Key** và **Endpoint ID**, kéo thả ảnh và xem 3D Mesh xoay 360 độ theo thời gian thực.

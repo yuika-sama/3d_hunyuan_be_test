@@ -23,6 +23,7 @@ from runpod_handler import (
     chunk_bytes,
     decode_base64_image,
     handler,
+    prepare_shape_image,
 )
 
 
@@ -52,6 +53,19 @@ class TestRunpodHandler(unittest.TestCase):
         pil_img, raw_bytes = decode_base64_image(uri_str)
         self.assertIsInstance(pil_img, Image.Image)
         self.assertEqual(pil_img.size, (64, 64))
+
+    def test_shape_input_preserves_existing_alpha(self):
+        image = Image.new("RGBA", (8, 8), (255, 0, 0, 0))
+        image.putpixel((4, 4), (255, 0, 0, 255))
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+
+        decoded, _ = decode_base64_image(base64.b64encode(buf.getvalue()).decode())
+        rembg = MagicMock()
+
+        self.assertEqual(decoded.mode, "RGBA")
+        self.assertIs(prepare_shape_image(decoded, rembg), decoded)
+        rembg.assert_not_called()
 
     def test_decode_base64_image_invalid_inputs(self):
         """Test error handling for empty or invalid image strings."""

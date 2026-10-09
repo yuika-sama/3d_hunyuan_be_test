@@ -164,12 +164,23 @@ def decode_base64_image(raw_str: str) -> Tuple[Image.Image, bytes]:
         pil_img.verify()  # verify image structure
         # Reopen after verify
         pil_img = Image.open(io.BytesIO(image_bytes))
-        if pil_img.mode != "RGB":
-            pil_img = pil_img.convert("RGB")
+        has_alpha = "A" in pil_img.getbands() or "transparency" in pil_img.info
+        pil_img = pil_img.convert("RGBA" if has_alpha else "RGB")
     except Exception as e:
         raise ValueError(f"Invalid image format or corrupted image: {str(e)}")
 
     return pil_img, image_bytes
+
+
+def prepare_shape_image(image: Image.Image, rembg) -> Image.Image:
+    """Keep a supplied cutout intact; infer alpha only for opaque inputs."""
+    if image.mode == "RGBA":
+        alpha_min, alpha_max = image.getchannel("A").getextrema()
+        if alpha_max == 0:
+            raise ValueError("Image alpha channel is fully transparent.")
+        if alpha_min < 255:
+            return image
+    return rembg(image)
 
 
 def chunk_bytes(data: bytes, chunk_size: int = CHUNK_SIZE_BYTES) -> list:
@@ -346,6 +357,7 @@ def handle_analyze(
 
     img_str = job_input.get("image_base64") or job_input.get("image")
     pil_img, _ = decode_base64_image(img_str)
+    pil_img = pil_img.convert("RGB")
 
     yield {
         "type": "progress",
@@ -409,6 +421,7 @@ def handle_caption(
 
     img_str = job_input.get("image_base64") or job_input.get("image")
     pil_img, _ = decode_base64_image(img_str)
+    pil_img = pil_img.convert("RGB")
     prompt = job_input.get("prompt")
     max_tokens = int(job_input.get("max_new_tokens", 60))
     min_tokens = int(job_input.get("min_new_tokens", 20))
@@ -575,6 +588,18 @@ def handle_generate3d(
     face_count = int(job_input.get("face_count", DEFAULT_FACE_COUNT))
     enable_texture = bool(job_input.get("texture", True))
 
+    logger.info(
+        "Shape config: model=%s subfolder=%s decoder=%s seed=%d octree=%d steps=%d guidance=%s faces=%d",
+        HUNYUAN_SHAPE_MODEL,
+        HUNYUAN_SHAPE_SUBFOLDER,
+        "flashvdm" if HUNYUAN_USE_FLASHVDM else "standard",
+        seed,
+        octree_res,
+        steps,
+        guidance,
+        face_count,
+    )
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     yield {
@@ -596,7 +621,7 @@ def handle_generate3d(
         "elapsed_ms": int((time.time() - start_time) * 1000),
     }
     t_prep_start = time.time()
-    image_no_bg = rembg(pil_img)
+    image_no_bg = prepare_shape_image(pil_img, rembg)
     prep_ms = int((time.time() - t_prep_start) * 1000)
 
     # 2. Shape generation
