@@ -330,6 +330,7 @@ class TestRunpodHandler(unittest.TestCase):
         shape_args = mock_shape_pipe.call_args.kwargs
         self.assertEqual(shape_args["octree_resolution"], 384)
         self.assertEqual(shape_args["num_inference_steps"], 50)
+        self.assertNotIn("mc_algo", shape_args)
         mock_shapegen.FloaterRemover.assert_not_called()
         mock_face_reducer.assert_called_once_with(mock_mesh, max_facenum=200000)
 
@@ -563,6 +564,7 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertIn("custom_pipeline=custom_pipeline_path", component_source)
         self.assertNotIn("**components", component_source)
         self.assertIn("UNet2p5DConditionModel.forward.__get__", component_source)
+        self.assertIn("Basic2p5DTransformerBlock.forward.__get__", component_source)
         self.assertIn("ref_scale_timing = ref_scale", unet_source)
         self.assertIn("original_inference_steps=30", component_source)
         self.assertIn('cross_attention_kwargs.pop("position_attn_mask"', unet_source)

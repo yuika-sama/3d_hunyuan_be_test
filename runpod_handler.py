@@ -646,7 +646,6 @@ def handle_generate3d(
             octree_resolution=octree_res,
             num_inference_steps=steps,
             guidance_scale=guidance,
-            mc_algo="mc",
         )
         if outputs and len(outputs) > 0:
             mesh = outputs[0]
@@ -682,7 +681,6 @@ def handle_generate3d(
                 octree_resolution=octree_res,
                 num_inference_steps=steps,
                 guidance_scale=guidance,
-                mc_algo="mc",
             )
             if outputs and len(outputs) > 0:
                 mesh = outputs[0]

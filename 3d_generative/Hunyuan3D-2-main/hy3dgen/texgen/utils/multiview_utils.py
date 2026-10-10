@@ -21,7 +21,7 @@ from typing import List
 from diffusers import DiffusionPipeline
 from diffusers import EulerAncestralDiscreteScheduler, LCMScheduler
 
-from ..hunyuanpaint.unet.modules import UNet2p5DConditionModel
+from ..hunyuanpaint.unet.modules import Basic2p5DTransformerBlock, UNet2p5DConditionModel
 
 
 class Multiview_Diffusion_Net():
@@ -38,8 +38,11 @@ class Multiview_Diffusion_Net():
             custom_pipeline=custom_pipeline_path,
             torch_dtype=torch.float16,
         )
-        # The Hub checkpoint still ships a turbo forward with undefined position masks.
+        # Diffusers caches the Hub code, so bind every affected instance to the fixed local forwards.
         pipeline.unet.forward = UNet2p5DConditionModel.forward.__get__(pipeline.unet, type(pipeline.unet))
+        for module in pipeline.unet.modules():
+            if module.__class__.__name__ == Basic2p5DTransformerBlock.__name__:
+                module.forward = Basic2p5DTransformerBlock.forward.__get__(module, type(module))
 
         if config.pipe_name in ['hunyuanpaint']:
             pipeline.scheduler = EulerAncestralDiscreteScheduler.from_config(pipeline.scheduler.config,
