@@ -36,13 +36,12 @@ from diffusers.image_processor import VaeImageProcessor
 from diffusers.pipelines.stable_diffusion.pipeline_output import StableDiffusionPipelineOutput
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import StableDiffusionPipeline, \
     retrieve_timesteps, rescale_noise_cfg
-from diffusers.schedulers import KarrasDiffusionSchedulers, LCMScheduler
+from diffusers.schedulers import KarrasDiffusionSchedulers
 from diffusers.utils import deprecate
 from einops import rearrange
 from transformers import CLIPImageProcessor, CLIPTextModel, CLIPTokenizer, CLIPVisionModelWithProjection
 
-from .unet.modules import UNet2p5DConditionModel, \
-    compute_multi_resolution_mask, compute_multi_resolution_discrete_voxel_indice
+from .unet.modules import UNet2p5DConditionModel, compute_multi_resolution_mask
 
 def guidance_scale_embedding(w, embedding_dim=512, dtype=torch.float32):
     """
@@ -136,33 +135,6 @@ def extract_into_tensor(a, t, x_shape, N_gen):
     b, c, *_ = out.shape
     return out.reshape(b, c, *((1,) * (len(x_shape) - 2)))
 
-class DDIMSolver:
-    def __init__(self, alpha_cumprods, timesteps=1000, ddim_timesteps=50):
-        # DDIM sampling parameters
-        step_ratio = timesteps // ddim_timesteps
-        self.ddim_timesteps = (np.arange(1, ddim_timesteps + 1) * step_ratio).round().astype(np.int64) - 1
-        self.ddim_alpha_cumprods = alpha_cumprods[self.ddim_timesteps]
-        self.ddim_alpha_cumprods_prev = np.asarray(
-            [alpha_cumprods[0]] + alpha_cumprods[self.ddim_timesteps[:-1]].tolist()
-        )
-        # convert to torch tensors
-        self.ddim_timesteps = torch.from_numpy(self.ddim_timesteps).long()
-        self.ddim_alpha_cumprods = torch.from_numpy(self.ddim_alpha_cumprods)
-        self.ddim_alpha_cumprods_prev = torch.from_numpy(self.ddim_alpha_cumprods_prev)
-
-    def to(self, device):
-        self.ddim_timesteps = self.ddim_timesteps.to(device)
-        self.ddim_alpha_cumprods = self.ddim_alpha_cumprods.to(device)
-        self.ddim_alpha_cumprods_prev = self.ddim_alpha_cumprods_prev.to(device)
-        return self
-
-    def ddim_step(self, pred_x0, pred_noise, timestep_index, N_gen):
-        alpha_cumprod_prev = extract_into_tensor(self.ddim_alpha_cumprods_prev, timestep_index, pred_x0.shape, N_gen)
-        dir_xt = (1.0 - alpha_cumprod_prev).sqrt() * pred_noise
-        x_prev = alpha_cumprod_prev.sqrt() * pred_x0 + dir_xt
-        return x_prev
-
-
 @torch.no_grad()
 def update_ema(target_params, source_params, rate=0.99):
     """
@@ -215,27 +187,17 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
             safety_checker=safety_checker,
             feature_extractor=torch.compile(feature_extractor) if use_torch_compile else feature_extractor,
         )
-        solver_device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.solver = DDIMSolver(
-            scheduler.alphas_cumprod.numpy(),
-            timesteps=scheduler.config.num_train_timesteps,
-            ddim_timesteps=30,
-        ).to(solver_device)
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
         self.is_turbo = False
-
-    def to(self, *args, **kwargs):
-        pipeline = super().to(*args, **kwargs)
-        device = kwargs.get('torch_device') if 'torch_device' in kwargs else (args[0] if len(args) > 0 else None)
-        if device is not None and hasattr(self, 'solver') and self.solver is not None:
-            self.solver.to(device)
-        return pipeline
 
     def set_turbo(self, is_turbo: bool):
         self.is_turbo = is_turbo
         if hasattr(self, 'unet') and hasattr(self.unet, 'is_turbo'):
             self.unet.is_turbo = is_turbo
+            for module in self.unet.modules():
+                if hasattr(module, 'is_turbo'):
+                    module.is_turbo = is_turbo
         
     @torch.no_grad()
     def encode_images(self, images):
@@ -348,9 +310,6 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                     cached_condition['position_maps'] = pos_maps
                 cached_condition['position_attn_mask'] = (
                     compute_multi_resolution_mask(pos_maps)
-                )
-                cached_condition['position_voxel_indices'] = (
-                    compute_multi_resolution_discrete_voxel_indice(pos_maps)
                 )
             
         if (guidance_scale > 1) and (not self.is_turbo):
@@ -611,15 +570,9 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
 
         # 4. Prepare 
         if self.is_turbo:
-            bsz = 3
-            N_gen = 15
-            if hasattr(self, 'solver') and self.solver is not None:
-                self.solver.to(device)
-                index = torch.arange(29, 0, -bsz, device=self.solver.ddim_timesteps.device).long()
-                timesteps = self.solver.ddim_timesteps[index]
-            else:
-                timesteps = torch.tensor([29, 26, 23, 20, 17, 14, 11, 8, 5, 2], device=device).long()
-            self.scheduler.set_timesteps(timesteps=timesteps.cpu(), device=device)
+            num_inference_steps = 10
+            self.scheduler.set_timesteps(num_inference_steps=num_inference_steps, device=device)
+            timesteps = self.scheduler.timesteps
         else:
             timesteps, num_inference_steps = retrieve_timesteps(
                 self.scheduler, num_inference_steps, device, timesteps, sigmas

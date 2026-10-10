@@ -20,7 +20,7 @@ flowchart TD
         E -->|Turbo override| E_FB["⚡ FlashVDM Decoder"]
         E --> F["🧊 Marching Cubes Surface Extractor"]
         E_FB --> F
-        F --> G["🧹 Mesh Cleanup (Floater + Degenerate Remover)"]
+        F --> G["🧹 Mesh Cleanup (Degenerate Remover)"]
         G --> H["📉 Face Decimation (FaceReducer max 200k)"]
     end
 
@@ -59,7 +59,7 @@ flowchart TD
 | Alpha/rembg + recenter | Tách silhouette, căn vật thể giữa khung 512×512 | Đây là đầu vào trực tiếp của shape model; mất tai/chân ở mask thì các lớp sau không thể khôi phục. PNG đã có alpha được giữ nguyên để tránh tách nền lần hai. |
 | Shape DiT | Suy diễn latent 3D từ một ảnh | Quyết định cấu trúc lớn và các mặt khuất; seed, steps và guidance tác động tại đây. |
 | VAE + Marching Cubes | Giải latent thành bề mặt tam giác | `octree_resolution` quyết định độ mịn không gian; không thể tạo lại chi tiết mà DiT không sinh. |
-| Mesh cleanup | Bỏ mặt lỗi/đảo nhỏ rồi giới hạn số face | Làm mesh ổn định cho texture; decimation quá thấp có thể làm cùn tai, móng và đuôi. |
+| Mesh cleanup | Bỏ mặt lỗi rồi giới hạn số face | Làm mesh ổn định cho texture; không tự xóa các component nhỏ có thể là tai, móng hoặc đuôi. |
 | Texture pipeline | Trải UV, tạo sáu view, bake và inpaint màu | Chỉ đổi vật liệu/màu trên mesh có sẵn, không sửa hình học bị thiếu. |
 | GLB export/stream | Đóng gói mesh + texture, checksum và chia chunk | Không đổi nội dung 3D; chỉ ảnh hưởng cách client nhận và kiểm tra file. |
 
@@ -85,9 +85,10 @@ Vì Hunyuan shape hiện là image-conditioned, `prompt`, BLIP và LLaVA không 
 ---
 
 ### 2.3. Hậu xử lý & Tối ưu lưới (Mesh Post-processing)
-- **FloaterRemover**: Quét và loại bỏ các đảo đa giác vụn vặt không liên kết với thân chính.
 - **DegenerateFaceRemover**: Loại bỏ các tam giác diện tích bằng 0 hoặc các cạnh trùng lặp.
 - **FaceReducer (`pymeshlab` Quadric Edge Collapse Decimation)**: Chỉ rút gọn mesh vượt quá 200,000 faces để giữ chi tiết hình học tốt hơn.
+
+Unified worker không chạy `FloaterRemover`: bộ lọc này xem mọi component nhỏ hơn 0.5% số face là rác và có thể xóa nhầm chi tiết tách rời nhưng hợp lệ như tai hoặc móng.
 
 ---
 
@@ -107,7 +108,7 @@ Mô hình sử dụng: `tencent/Hunyuan3D-2` (subfolder: `hunyuan3d-paint-v2-0-t
      - Góc tà (Elevation): $[0^\circ, 0^\circ, 0^\circ, 0^\circ, 90^\circ, -90^\circ]$
 4. **Khuếch tán đa góc nhìn (`Multiview_Diffusion_Net`)**:
    - `HunyuanPaintPipeline` (UNet 2.5D Condition Model + LCM Scheduler).
-   - Lấy mẫu trong 3-5 bước turbo dựa trên các Normal/Position maps để sinh ra 6 bức ảnh nhìn từ 6 góc tương ứng với ánh sáng tự nhiên đồng nhất.
+   - Lấy mẫu 10 bước trên lịch distillation 30 bước của checkpoint, dựa trên các Normal/Position maps để sinh ra 6 bức ảnh nhìn từ 6 góc tương ứng với ánh sáng tự nhiên đồng nhất.
    - Tải trực tiếp trọng số qua định dạng `diffusion_pytorch_model.safetensors` (3.72 GB) tối ưu tốc độ và an toàn bộ nhớ.
 5. **Bake Texture & Khử đường giáp ranh (`Fast Texture Baking`)**:
    - Chiếu ngược (back-project) 6 bức ảnh multiview lên UV canvas độ phân giải $2048 \times 2048$.

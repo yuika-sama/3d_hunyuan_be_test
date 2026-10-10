@@ -570,7 +570,7 @@ def handle_generate3d(
     job_input: Dict[str, Any], start_time: float
 ) -> Generator[Dict[str, Any], None, None]:
     """Execute Hunyuan3D-2 3D mesh + texture generation with stream chunking."""
-    from hy3dgen.shapegen import DegenerateFaceRemover, FaceReducer, FloaterRemover
+    from hy3dgen.shapegen import DegenerateFaceRemover, FaceReducer
 
     yield {
         "type": "progress",
@@ -713,7 +713,6 @@ def handle_generate3d(
     }
     t_clean_start = time.time()
     try:
-        mesh = FloaterRemover()(mesh)
         mesh = DegenerateFaceRemover()(mesh)
         mesh = FaceReducer()(mesh, max_facenum=face_count)
     except Exception as e:

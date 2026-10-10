@@ -119,12 +119,10 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
         cross_attention_kwargs = cross_attention_kwargs.copy() if cross_attention_kwargs is not None else {}
         num_in_batch = cross_attention_kwargs.pop('num_in_batch', 1)
         mode = cross_attention_kwargs.pop('mode', None)
-        if not self.is_turbo:
-            mva_scale = cross_attention_kwargs.pop('mva_scale', 1.0)
-            ref_scale = cross_attention_kwargs.pop('ref_scale', 1.0)
-        else:
+        mva_scale = cross_attention_kwargs.pop('mva_scale', 1.0)
+        ref_scale = cross_attention_kwargs.pop('ref_scale', 1.0)
+        if self.is_turbo:
             position_attn_mask = cross_attention_kwargs.pop("position_attn_mask", None)
-            position_voxel_indices = cross_attention_kwargs.pop("position_voxel_indices", None)
             mva_scale = 1.0
             ref_scale = 1.0
             
@@ -212,15 +210,10 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
                         position_mask = position_attn_mask[multivew_hidden_states.shape[1]]
                         if isinstance(position_mask, torch.Tensor):
                             position_mask = position_mask.to(multivew_hidden_states.device)
-                position_indices = None
-                if position_voxel_indices is not None:
-                    if multivew_hidden_states.shape[1] in position_voxel_indices:
-                        position_indices = position_voxel_indices[multivew_hidden_states.shape[1]]
                 attn_output = self.attn_multiview(
                     multivew_hidden_states,
                     encoder_hidden_states=multivew_hidden_states,
                     attention_mask=position_mask,
-                    position_indices=position_indices,
                     **cross_attention_kwargs
                 )
             else:
@@ -354,52 +347,6 @@ def compute_multi_resolution_mask(position_maps, grid_resolutions=[32, 16, 8]):
             position_mask = rearrange(position_mask, 'b ni nj li lj -> b (ni li) (nj lj)')
             position_attn_mask[position_mask.shape[1]] = position_mask
     return position_attn_mask
-
-@torch.no_grad()
-def compute_discrete_voxel_indice(position, grid_resolution=8, voxel_resolution=128):
-
-    position = position.half()    
-    B,N,_,H,W = position.shape
-    assert H%grid_resolution==0 and W%grid_resolution==0
-
-    valid_mask = (position != 1).all(dim=2, keepdim=True)
-    valid_mask = valid_mask.expand_as(position)
-    position[valid_mask==False] = 0
-    
-    position = rearrange(
-        position, 
-        'b n c (num_h grid_h) (num_w grid_w) -> b n num_h num_w c grid_h grid_w', 
-        num_h=grid_resolution, num_w=grid_resolution
-    )
-    valid_mask = rearrange(
-        valid_mask, 
-        'b n c (num_h grid_h) (num_w grid_w) -> b n num_h num_w c grid_h grid_w', 
-        num_h=grid_resolution, num_w=grid_resolution
-    )
-
-    grid_position = position.sum(dim=(-2, -1))
-    count_masked = valid_mask.sum(dim=(-2, -1))
-
-    grid_position = grid_position / count_masked.clamp(min=1)
-    grid_position[count_masked<5] = 0
-
-    grid_position = grid_position.permute(0,1,4,2,3).clamp(0, 1) # B N C H W
-    voxel_indices = grid_position * (voxel_resolution - 1)
-    voxel_indices = torch.round(voxel_indices).long()
-    return voxel_indices
-    
-def compute_multi_resolution_discrete_voxel_indice(
-    position_maps, 
-    grid_resolutions=[64, 32, 16, 8], 
-    voxel_resolutions=[512, 256, 128, 64]
-):
-    voxel_indices = {}
-    with torch.no_grad():
-        for grid_resolution, voxel_resolution in zip(grid_resolutions, voxel_resolutions):
-            voxel_indice = compute_discrete_voxel_indice(position_maps, grid_resolution, voxel_resolution)
-            voxel_indice = rearrange(voxel_indice, 'b n c h w -> b (n h w) c')
-            voxel_indices[voxel_indice.shape[1]] = {'voxel_indices':voxel_indice, 'voxel_resolution':voxel_resolution}
-    return voxel_indices
 
 class UNet2p5DConditionModel(torch.nn.Module):
     def __init__(self, unet: UNet2DConditionModel) -> None:
@@ -571,12 +518,10 @@ class UNet2p5DConditionModel(torch.nn.Module):
 
         if self.is_turbo:
             position_attn_mask = cached_condition.get('position_attn_mask', None)
-            position_voxel_indices = cached_condition.get('position_voxel_indices', None)
             cross_attention_kwargs_ = {
                 'mode': 'r', 'num_in_batch': N_gen,
                 'condition_embed_dict': condition_embed_dict,
-                'position_attn_mask': position_attn_mask, 
-                'position_voxel_indices': position_voxel_indices,
+                'position_attn_mask': position_attn_mask,
                 'mva_scale': mva_scale,
                 'ref_scale': ref_scale,
             }

@@ -46,7 +46,8 @@ class Multiview_Diffusion_Net():
                                                                              timestep_spacing='trailing')
         elif config.pipe_name in ['hunyuanpaint-turbo']:
             pipeline.scheduler = LCMScheduler.from_config(pipeline.scheduler.config,
-                                                        timestep_spacing='trailing')
+                                                        timestep_spacing='trailing',
+                                                        original_inference_steps=30)
             pipeline.set_turbo(True)
             # pipeline.prepare() 
 
