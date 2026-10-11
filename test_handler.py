@@ -67,6 +67,28 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertIs(prepare_shape_image(decoded, rembg), decoded)
         rembg.assert_not_called()
 
+    def test_model_manager_tex_pipeline_offload_and_move(self):
+        """Move the owning pipeline once; it recursively moves its submodels."""
+        mock_pipe = MagicMock()
+        mock_submodel_1 = MagicMock()
+        mock_submodel_2 = MagicMock()
+        mock_pipe.models = {
+            "delight_model": mock_submodel_1,
+            "multiview_model": mock_submodel_2,
+        }
+
+        # Test move
+        runpod_handler.ModelManager.move_tex_pipeline(mock_pipe, "cuda")
+        mock_pipe.to.assert_called_with("cuda")
+        mock_submodel_1.to.assert_not_called()
+        mock_submodel_2.to.assert_not_called()
+
+        # Test offload
+        runpod_handler.ModelManager.offload_tex_pipeline(mock_pipe)
+        mock_pipe.to.assert_called_with("cpu")
+        mock_submodel_1.to.assert_not_called()
+        mock_submodel_2.to.assert_not_called()
+
     def test_decode_base64_image_invalid_inputs(self):
         """Test error handling for empty or invalid image strings."""
         with self.assertRaises(ValueError):
@@ -237,13 +259,10 @@ class TestRunpodHandler(unittest.TestCase):
         mock_rembg = MagicMock(side_effect=lambda image: image)
         mock_shape_pipe = MagicMock()
         mock_shape_pipe.return_value = [mock_mesh]
-        mock_tex_pipe = MagicMock()
-        mock_tex_pipe.return_value = mock_mesh
 
         mock_load_hunyuan.return_value = {
             "rembg": mock_rembg,
             "shape_pipeline": mock_shape_pipe,
-            "tex_pipeline": mock_tex_pipe,
         }
 
         mock_shapegen = MagicMock()
@@ -356,6 +375,7 @@ class TestRunpodHandler(unittest.TestCase):
 
         stages = [e["stage"] for e in events if e.get("type") == "progress"]
         self.assertIn("texture_generation", stages)
+        mock_load_hunyuan.assert_called_once_with(load_texture=True)
         mock_move.assert_called_once()
         mock_offload.assert_called_once()
         mock_tex_pipe.assert_called_once()
@@ -382,7 +402,6 @@ class TestRunpodHandler(unittest.TestCase):
         mock_load_hunyuan.return_value = {
             "rembg": mock_rembg,
             "shape_pipeline": mock_shape_pipe,
-            "tex_pipeline": None,
         }
 
         mock_shapegen = MagicMock()
@@ -427,7 +446,6 @@ class TestRunpodHandler(unittest.TestCase):
         mock_load_hunyuan.return_value = {
             "rembg": mock_rembg,
             "shape_pipeline": mock_shape_pipe,
-            "tex_pipeline": None,
         }
 
         mock_shapegen = MagicMock()
@@ -506,28 +524,6 @@ class TestRunpodHandler(unittest.TestCase):
         error_event = next(e for e in events if e.get("type") == "error")
         self.assertIn("refusing to return an untextured model", error_event["error"])
 
-    def test_model_manager_tex_pipeline_offload_and_move(self):
-        """Move the owning pipeline once; it recursively moves its submodels."""
-        mock_pipe = MagicMock()
-        mock_submodel_1 = MagicMock()
-        mock_submodel_2 = MagicMock()
-        mock_pipe.models = {
-            "delight_model": mock_submodel_1,
-            "multiview_model": mock_submodel_2,
-        }
-
-        # Test move
-        runpod_handler.ModelManager.move_tex_pipeline(mock_pipe, "cuda")
-        mock_pipe.to.assert_called_with("cuda")
-        mock_submodel_1.to.assert_not_called()
-        mock_submodel_2.to.assert_not_called()
-
-        # Test offload
-        runpod_handler.ModelManager.offload_tex_pipeline(mock_pipe)
-        mock_pipe.to.assert_called_with("cpu")
-        mock_submodel_1.to.assert_not_called()
-        mock_submodel_2.to.assert_not_called()
-
     def test_texture_loader_uses_repository_weight_formats(self):
         """Keep the mixed Hunyuan texture checkpoint formats explicit."""
         root = Path(__file__).parent / "3d_generative/Hunyuan3D-2-main/hy3dgen/texgen"
@@ -555,7 +551,6 @@ class TestRunpodHandler(unittest.TestCase):
         cache_source = (root / "pipelines.py").read_text(encoding="utf-8")
         component_source = (root / "utils/multiview_utils.py").read_text(encoding="utf-8")
         delight_source = (root / "utils/dehighlight_utils.py").read_text(encoding="utf-8")
-        preload_source = (Path(__file__).parent / "preload_models.py").read_text(encoding="utf-8")
 
         self.assertIn("images = images.to(device=device, dtype=dtype)", pipeline_source)
         self.assertIn(".to(device)", pipeline_source)
@@ -566,6 +561,7 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertIn("os.path.getsize(os.path.join(root, path)) > 1000", cache_source)
         self.assertIn("else torch.float32", component_source)
         self.assertIn("else torch.float32", delight_source)
+        preload_source = (Path(__file__).parent / "preload_models.py").read_text(encoding="utf-8")
         self.assertIn('tex_pipeline.to("cpu")', preload_source)
         self.assertNotIn('m.pipeline.to("cpu")', preload_source)
 

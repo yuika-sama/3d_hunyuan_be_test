@@ -396,7 +396,10 @@ def handle_generate3d(
     texture_img = None
     if enable_texture:
         texture_str = job_input.get("texture_image_base64") or job_input.get("texture_image")
-        texture_img, _ = decode_base64_image(texture_str)
+        if texture_str:
+            texture_img, _ = decode_base64_image(texture_str)
+        else:
+            texture_img = pil_img
 
     logger.info(
         "Shape config: model=%s subfolder=%s decoder=%s seed=%d octree=%d steps=%d guidance=%s faces=%d",
@@ -650,28 +653,31 @@ def handle_pipeline(
         }
         return
 
-    texture_input = {
-        **job_input,
-        "image_base64": job_input.get("texture_image_base64"),
-        "image": job_input.get("texture_image"),
-    }
     texture_moderation = None
-    for event in handle_analyze(texture_input, start_time):
-        if event.get("type") == "result":
-            texture_moderation = event["data"]
-        elif event.get("type") == "progress":
-            yield {**event, "stage": f"texture_moderation.{event['stage']}"}
-
-    if not texture_moderation:
-        raise RuntimeError("Texture NSFW stage returned no result.")
-    if texture_moderation.get("is_nsfw"):
-        yield {
-            "type": "error",
-            "stage": "texture_moderation",
-            "error": "Texture image violates NSFW policy.",
-            "data": texture_moderation,
+    if job_input.get("texture_image_base64") or job_input.get("texture_image"):
+        texture_input = {
+            **job_input,
+            "image_base64": job_input.get("texture_image_base64"),
+            "image": job_input.get("texture_image"),
         }
-        return
+        for event in handle_analyze(texture_input, start_time):
+            if event.get("type") == "result":
+                texture_moderation = event["data"]
+            elif event.get("type") == "progress":
+                yield {**event, "stage": f"texture_moderation.{event['stage']}"}
+
+        if not texture_moderation:
+            raise RuntimeError("Texture NSFW stage returned no result.")
+        if texture_moderation.get("is_nsfw"):
+            yield {
+                "type": "error",
+                "stage": "texture_moderation",
+                "error": "Texture image violates NSFW policy.",
+                "data": texture_moderation,
+            }
+            return
+    else:
+        texture_moderation = moderation
 
     yield {
         "type": "result",

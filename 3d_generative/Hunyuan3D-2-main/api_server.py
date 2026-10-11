@@ -176,16 +176,14 @@ class ModelWorker:
         self.pipeline.enable_flashvdm(mc_algo='mc')
 
         # 2. Load Model Tô màu (Nếu có)
+        self.pipeline_tex = None
         if enable_tex:
-            # Sửa: Thêm device="cpu" hoặc ép chuyển ngay
-            self.pipeline_tex = Hunyuan3DPaintPipeline.from_pretrained(tex_model_path)
-            
-            if hasattr(self.pipeline_tex, "unet"): self.pipeline_tex.unet.to("cpu")
-            if hasattr(self.pipeline_tex, "vae"): self.pipeline_tex.vae.to("cpu")
-            if hasattr(self.pipeline_tex, "text_encoder") and self.pipeline_tex.text_encoder:
-                self.pipeline_tex.text_encoder.to("cpu")
-            
-            logger.info("Texture model loaded and offloaded to CPU.")
+            try:
+                self.pipeline_tex = Hunyuan3DPaintPipeline.from_pretrained(tex_model_path)
+                self.pipeline_tex.to("cpu")
+                logger.info("Texture model loaded and offloaded to CPU.")
+            except Exception as e:
+                logger.error(f"Failed to load texture model: {e}")
 
         # --- [QUAN TRỌNG NHẤT] ---
         # Lệnh này bắt buộc PyTorch trả lại VRAM thừa cho Windows
@@ -212,9 +210,8 @@ class ModelWorker:
         texture_image = None
         if params.get('texture', False) or params.get('do_texture', False):
             texture_image_base64 = params.pop('texture_image', None)
-            if not texture_image_base64:
-                raise ValueError("No texture image provided")
-            texture_image = self.rembg(load_image_from_base64(texture_image_base64))
+            if texture_image_base64:
+                texture_image = self.rembg(load_image_from_base64(texture_image_base64))
 
         if 'image' in params:
             image = params["image"]
@@ -269,35 +266,28 @@ class ModelWorker:
         # 3. Tô màu (Texture Generation)
         if params.get('texture', False) or params.get('do_texture', False):
             print(">>> [Texture] Starting texture process...")
-            try:
-                mesh = FloaterRemover()(mesh)
-                mesh = DegenerateFaceRemover()(mesh)
-                mesh = FaceReducer()(mesh, max_facenum=params.get('face_count', 40000))
-                
-                # --- [OFF-LOADING TÔ MÀU - ĐÃ SỬA LỖI] ---
-                print(">>> [Texture] Loading Paint parts to GPU...")
-                # Thay vì chuyển cả pipeline, ta chuyển từng phần
-                if hasattr(self.pipeline_tex, "unet"): self.pipeline_tex.unet.to(self.device)
-                if hasattr(self.pipeline_tex, "vae"): self.pipeline_tex.vae.to(self.device)
-                if hasattr(self.pipeline_tex, "text_encoder") and self.pipeline_tex.text_encoder: 
-                    self.pipeline_tex.text_encoder.to(self.device)
-                
-                print(">>> [Texture] Painting...")
-                mesh = self.pipeline_tex(mesh, texture_image)
-                
-                print(">>> [Texture] Unloading Paint parts to CPU...")
-                # Chuyển ngược lại về CPU
-                if hasattr(self.pipeline_tex, "unet"): self.pipeline_tex.unet.to("cpu")
-                if hasattr(self.pipeline_tex, "vae"): self.pipeline_tex.vae.to("cpu")
-                if hasattr(self.pipeline_tex, "text_encoder") and self.pipeline_tex.text_encoder:
-                    self.pipeline_tex.text_encoder.to("cpu")
-                
-                torch.cuda.empty_cache()          
-                # -----------------------------------------
-            except Exception as e:
-                print(f"ERROR Texture Process: {e}")
-                # Nếu lỗi tô màu, ta vẫn trả về hình trắng thay vì sập server
-                pass 
+            mesh = FloaterRemover()(mesh)
+            mesh = DegenerateFaceRemover()(mesh)
+            mesh = FaceReducer()(mesh, max_facenum=params.get('face_count', 40000))
+
+            tex_input_img = texture_image if texture_image is not None else image
+            if self.pipeline_tex is not None:
+                try:
+                    print(">>> [Texture] Moving Paint pipeline to GPU...")
+                    self.pipeline_tex.to(self.device)
+                    print(">>> [Texture] Painting...")
+                    textured_mesh = self.pipeline_tex(mesh, tex_input_img)
+                    if textured_mesh is not None:
+                        mesh = textured_mesh
+                    print(">>> [Texture] Offloading Paint pipeline to CPU...")
+                except Exception as e:
+                    print(f"ERROR Texture Process: {e}")
+                    raise
+                finally:
+                    self.pipeline_tex.to("cpu")
+                    torch.cuda.empty_cache()
+            else:
+                logger.warning("pipeline_tex is not loaded, returning untextured mesh.")
 
         # 4. Lưu file và trả về
         type = params.get('type', 'glb')
