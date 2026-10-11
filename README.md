@@ -54,8 +54,6 @@ flowchart TD
 | Lớp | Mục đích | Dữ liệu chuyển sang lớp sau / ảnh hưởng tới 3D |
 | :--- | :--- | :--- |
 | NSFW (`analyze`) | Chặn ảnh không phù hợp trước khi dùng các model nặng | Nếu bị chặn, toàn bộ pipeline dừng. Nếu đạt, ảnh gốc đi tiếp; score không đổi shape. |
-| BLIP (`caption`) | Tạo caption ngắn để LLaVA có thêm ngữ cảnh | Caption được ghép vào prompt của LLaVA; không được truyền vào Hunyuan3D. |
-| LLaVA (`custom_describe`) | Sinh mô tả giàu thông tin cho API/người dùng | Trả `rich_prompt`; hiện chỉ là metadata, không điều khiển geometry hay texture. |
 | Alpha/rembg + recenter | Tách silhouette, căn vật thể giữa khung 512×512 | Đây là đầu vào trực tiếp của shape model; mất tai/chân ở mask thì các lớp sau không thể khôi phục. PNG đã có alpha được giữ nguyên để tránh tách nền lần hai. |
 | Shape DiT | Suy diễn latent 3D từ một ảnh | Quyết định cấu trúc lớn và các mặt khuất; seed, steps và guidance tác động tại đây. |
 | VAE + Marching Cubes | Giải latent thành bề mặt tam giác | `octree_resolution` quyết định độ mịn không gian; không thể tạo lại chi tiết mà DiT không sinh. |
@@ -63,7 +61,7 @@ flowchart TD
 | Texture pipeline | Trải UV, tạo sáu view, bake và inpaint màu | Chỉ đổi vật liệu/màu trên mesh có sẵn, không sửa hình học bị thiếu. |
 | GLB export/stream | Đóng gói mesh + texture, checksum và chia chunk | Không đổi nội dung 3D; chỉ ảnh hưởng cách client nhận và kiểm tra file. |
 
-Vì Hunyuan shape hiện là image-conditioned, `prompt`, BLIP và LLaVA không thể sửa một cái tai bị thiếu. Hai đầu vào quyết định trực tiếp nhất là silhouette sau tiền xử lý và checkpoint/seed của Shape DiT.
+BLIP và LLaVA đã được bỏ khỏi worker vì output văn bản của chúng không điều khiển geometry hoặc texture. Hai đầu vào quyết định trực tiếp nhất tới shape là silhouette sau tiền xử lý và checkpoint/seed của Shape DiT.
 
 ### 2.1. Tiền xử lý ảnh (Preprocessing & Background Removal)
 - **Model**: `BackgroundRemover` (`u2net.onnx` qua ONNX Runtime).
@@ -151,12 +149,10 @@ Base URL: `https://api.runpod.ai/v2/{ENDPOINT_ID}`. Mọi request dùng header `
 | Action | Mục đích | Input riêng | Output chính |
 | :--- | :--- | :--- | :--- |
 | `analyze` | Kiểm tra NSFW | — | Event `result` chứa scores và `is_nsfw` |
-| `caption` | Tạo caption BLIP | `prompt`, `max_new_tokens`, `min_new_tokens` | Event `result` chứa `caption` |
-| `custom_describe` | Phân tích ảnh bằng LLaVA | `prompt`, `model` | Event `result` chứa mô tả Việt/Anh |
 | `generate3d` | Sinh shape, mesh và texture | Các tham số tại mục 4.2 | Chuỗi event và các chunk GLB |
-| `pipeline` | Chạy toàn bộ bốn bước trên | `prompt` và các tham số shape | Kết quả phân tích, sau đó các chunk GLB |
+| `pipeline` | Chạy NSFW rồi sinh 3D có texture | Các tham số shape | Kết quả moderation, sau đó các chunk GLB |
 
-Tất cả action yêu cầu `image_base64` hoặc alias `image`. Giá trị có thể là Base64 thuần hoặc data URI; dung lượng sau decode tối đa 25 MB. Nên dùng `POST /run` rồi đọc `GET /stream/{JOB_ID}` cho `generate3d` và `pipeline`; `/runsync` phù hợp hơn với các action chỉ trả JSON nhỏ.
+Tất cả action yêu cầu `image_base64` hoặc alias `image`. Giá trị có thể là Base64 thuần hoặc data URI; dung lượng sau decode tối đa 25 MB. Nên dùng `POST /run` rồi đọc `GET /stream/{JOB_ID}` cho `generate3d` và `pipeline`; `/runsync` phù hợp với `analyze`.
 
 ```bash
 curl -X POST "https://api.runpod.ai/v2/${ENDPOINT_ID}/run" \
@@ -206,7 +202,7 @@ Worker phát các object sau theo thứ tự:
 
 Sắp xếp `file_chunk` theo `index`, decode Base64 rồi nối byte; kiểm tra kích thước và SHA-256 bằng event `file_meta`. Khi thất bại worker phát `{"type":"error","stage":"execution","error":"...","timings":{"total_ms":100}}` thay vì file.
 
-Các stage chính của `generate3d`: `decode_input`, `worker_init`, `preprocess`, `shape_generation`, `mesh_cleanup`, `loading_texture_pipeline`, `texture_generation`, `glb_export`. Với action `pipeline`, stage được thêm prefix `moderation.`, `caption.`, `analysis.` hoặc `generate3d.`.
+Các stage chính của `generate3d`: `decode_input`, `worker_init`, `preprocess`, `shape_generation`, `mesh_cleanup`, `loading_texture_pipeline`, `texture_generation`, `glb_export`. Với action `pipeline`, stage được thêm prefix `moderation.` hoặc `generate3d.`.
 
 ### 4.4. Unified pipeline trên Runpod
 
@@ -215,7 +211,6 @@ Các stage chính của `generate3d`: `decode_input`, `worker_init`, `preprocess
   "input": {
     "action": "pipeline",
     "image_base64": "data:image/png;base64,iVBORw0KGgo...",
-    "prompt": "Phân tích vật liệu và hình khối để dựng 3D",
     "octree_resolution": 384,
     "num_inference_steps": 50,
     "face_count": 200000
@@ -227,7 +222,7 @@ Các stage chính của `generate3d`: `decode_input`, `worker_init`, `preprocess
 }
 ```
 
-Luồng xử lý là `NSFW → BLIP → LLaVA → Hunyuan3D`. Texture luôn được bật cho action này; ảnh NSFW tạo event `error` ở stage `moderation` và dừng trước các model còn lại.
+Luồng xử lý là `NSFW → Hunyuan3D`. Texture luôn được bật cho action này; ảnh NSFW tạo event `error` ở stage `moderation` và dừng trước model 3D. BLIP, LLaVA, Ollama và model `llava:7b` không còn nằm trong image Runpod.
 
 ### 4.5. Local Gateway
 
@@ -240,15 +235,14 @@ Base URL mặc định: `http://127.0.0.1:4000`. FastAPI cung cấp Swagger UI t
 | `POST` | `/caption` | multipart `image`; form `prompt`, `max_new_tokens`, `min_new_tokens` | JSON caption |
 | `POST` | `/custom_describe` | multipart `image`; form `prompt` | JSON mô tả |
 | `POST` | `/generate3d` | multipart `image` | Binary `model/gltf-binary` |
-| `POST` | `/pipeline/process-all` | JPEG/PNG multipart `image` ≤ 20 MB; form `prompt` tùy chọn | JSON chứa `task_id` và `glb_url` |
+| `POST` | `/pipeline/process-all` | JPEG/PNG multipart `image` ≤ 20 MB | JSON chứa `task_id` và `glb_url` |
 | `GET` | `/pipeline/result/{task_id}.glb` | UUID từ pipeline | Binary GLB |
 
 `/generate3d` của local gateway chưa expose các tham số quality; nó dùng mặc định của backend 3D. Pipeline đầy đủ:
 
 ```bash
 curl -X POST http://127.0.0.1:4000/pipeline/process-all \
-  -F "image=@chair.png" \
-  -F "prompt=Phân tích vật liệu và hình khối để dựng 3D"
+  -F "image=@chair.png"
 ```
 
 ```json
@@ -257,8 +251,6 @@ curl -X POST http://127.0.0.1:4000/pipeline/process-all \
   "task_id": "936da01f-9abd-4d9d-80c7-02af85c822a8",
   "results": {
     "moderation": {"ok": true, "is_nsfw": false},
-    "description": {"caption": "a wooden chair"},
-    "rich_prompt": "Ghế gỗ sồi, bốn chân tròn",
     "model_3d": {
       "status": "success",
       "glb_url": "/pipeline/result/936da01f-9abd-4d9d-80c7-02af85c822a8.glb"
@@ -277,7 +269,7 @@ Các lỗi gateway thường gặp: `400` ảnh rỗng hoặc bị chặn NSFW, 
 ```bash
 python -m pytest test_handler.py test_gateway.py -v
 ```
-*(Bao gồm 24 unit tests cho worker, model preload, unified gateway, texture fallback, Base64, chunking và checksum.)*
+*(Bao gồm unit tests cho worker, model preload, unified gateway, texture fallback, Base64, chunking và checksum.)*
 
 ### 5.2. Chạy Giao diện Test Web Trực quan
 Mở trực tiếp file [`test_local_serverless.html`](file:///f:/codingSpace/Asm/3d_hunyuan_be/test_local_serverless.html) trong trình duyệt để nhập **Runpod API Key** và **Endpoint ID**, kéo thả ảnh và xem 3D Mesh xoay 360 độ theo thời gian thực.

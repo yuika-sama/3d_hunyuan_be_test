@@ -4,7 +4,7 @@ Covers:
 - Image decoding and validation (base64, data URIs, error cases)
 - Chunking and SHA256 GLB reassembly
 - Handler action routing, error reporting, and stream generator events
-- Memory management and Ollama model unload calls
+- Model lifecycle and lean container configuration
 """
 
 import base64
@@ -107,6 +107,17 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertEqual(kwargs["repo_id"], "tencent/Hunyuan3D-2.1")
         self.assertIn("hunyuan3d-dit-v2-1/*.ckpt", kwargs["allow_patterns"])
 
+    def test_container_excludes_blip_and_llava(self):
+        root = Path(__file__).parent
+        build_source = (root / "Dockerfile").read_text(encoding="utf-8")
+        handler_source = (root / "runpod_handler.py").read_text(encoding="utf-8")
+        requirements = (root / "requirements-runpod.txt").read_text(encoding="utf-8")
+
+        for removed in ("ollama", "llava", "BLIP_MODEL_NAME", "handle_caption", "handle_custom_describe"):
+            self.assertNotIn(removed, build_source + handler_source)
+        self.assertNotIn("deep-translator", requirements)
+        self.assertNotIn("pytest", requirements)
+
     def test_handler_missing_action(self):
         """Test error event when 'action' is missing from request input."""
         job = {"input": {"image_base64": self.dummy_b64}}
@@ -124,24 +135,10 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertIn("Invalid action", events[0]["error"])
 
     @patch.object(runpod_handler, "handle_generate3d")
-    @patch.object(runpod_handler, "handle_custom_describe")
-    @patch.object(runpod_handler, "handle_caption")
     @patch.object(runpod_handler, "handle_analyze")
-    def test_handler_pipeline_runs_all_stages(
-        self, mock_analyze, mock_caption, mock_describe, mock_generate3d
-    ):
+    def test_handler_pipeline_runs_all_stages(self, mock_analyze, mock_generate3d):
         mock_analyze.return_value = iter(
             [{"type": "result", "action": "analyze", "data": {"is_nsfw": False}}]
-        )
-        mock_caption.return_value = iter(
-            [{"type": "result", "action": "caption", "data": {"caption": "a chair"}}]
-        )
-        mock_describe.return_value = iter(
-            [{
-                "type": "result",
-                "action": "custom_describe",
-                "data": {"description": "Ghế gỗ", "description_en": "Wooden chair"},
-            }]
         )
         mock_generate3d.return_value = iter(
             [
@@ -154,18 +151,14 @@ class TestRunpodHandler(unittest.TestCase):
         events = list(handler({"input": {"action": "pipeline", "image_base64": self.dummy_b64}}))
 
         result = next(event for event in events if event.get("action") == "pipeline")
-        self.assertEqual(result["data"]["rich_prompt"], "Ghế gỗ")
+        self.assertFalse(result["data"]["moderation"]["is_nsfw"])
         self.assertTrue(any(event.get("type") == "file_chunk" for event in events))
         mock_generate3d.assert_called_once()
         self.assertTrue(mock_generate3d.call_args.args[0]["texture"])
 
     @patch.object(runpod_handler, "handle_generate3d")
-    @patch.object(runpod_handler, "handle_custom_describe")
-    @patch.object(runpod_handler, "handle_caption")
     @patch.object(runpod_handler, "handle_analyze")
-    def test_handler_pipeline_stops_on_nsfw(
-        self, mock_analyze, mock_caption, mock_describe, mock_generate3d
-    ):
+    def test_handler_pipeline_stops_on_nsfw(self, mock_analyze, mock_generate3d):
         mock_analyze.return_value = iter(
             [{"type": "result", "action": "analyze", "data": {"is_nsfw": True}}]
         )
@@ -174,8 +167,6 @@ class TestRunpodHandler(unittest.TestCase):
 
         error = next(event for event in events if event.get("type") == "error")
         self.assertEqual(error["stage"], "moderation")
-        mock_caption.assert_not_called()
-        mock_describe.assert_not_called()
         mock_generate3d.assert_not_called()
 
     @patch.object(runpod_handler.model_manager, "load_nsfw")
@@ -203,50 +194,6 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertTrue(result_event["data"]["ok"])
         self.assertEqual(result_event["data"]["top_label"], "Normal")
         self.assertFalse(result_event["data"]["is_nsfw"])
-
-    @patch.object(runpod_handler.model_manager, "load_blip")
-    def test_handler_caption_success(self, mock_load_blip):
-        """Test caption action stream events with mocked BLIP model."""
-        mock_processor = MagicMock()
-        mock_processor.return_value = MagicMock(to=lambda d: {})
-        mock_processor.decode.return_value = "a 3D model of a red cube"
-
-        mock_model = MagicMock()
-        mock_model.generate.return_value = [MagicMock()]
-        mock_load_blip.return_value = (mock_processor, mock_model)
-
-        job = {"input": {"action": "caption", "image_base64": self.dummy_b64, "prompt": "a photo of"}}
-        events = list(handler(job))
-
-        result_event = next(e for e in events if e.get("type") == "result")
-        self.assertEqual(result_event["action"], "caption")
-        self.assertEqual(result_event["data"]["caption"], "a 3D model of a red cube")
-
-    @patch("runpod_handler.httpx.Client")
-    @patch.object(runpod_handler.model_manager, "unload_ollama")
-    def test_handler_custom_describe_success(self, mock_unload_ollama, mock_client_cls):
-        """Test custom_describe action stream events with mocked Ollama HTTP response."""
-        mock_client = MagicMock()
-        mock_res = MagicMock()
-        mock_res.status_code = 200
-        mock_res.json.return_value = {"response": "A detailed red textured cube."}
-        mock_client.__enter__.return_value.post.return_value = mock_res
-        mock_client_cls.return_value = mock_client
-
-        job = {
-            "input": {
-                "action": "custom_describe",
-                "image_base64": self.dummy_b64,
-                "prompt": "Mô tả chi tiết vật thể",
-            }
-        }
-        events = list(handler(job))
-
-        result_event = next(e for e in events if e.get("type") == "result")
-        self.assertEqual(result_event["action"], "custom_describe")
-        self.assertTrue(result_event["data"]["ok"])
-        self.assertIn("description", result_event["data"])
-        mock_unload_ollama.assert_called_once()
 
     @patch.object(runpod_handler.model_manager, "load_hunyuan")
     def test_handler_generate3d_streaming_chunks(self, mock_load_hunyuan):

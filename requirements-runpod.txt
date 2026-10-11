@@ -19,6 +19,3 @@ xatlas
 rembg
 onnxruntime
 pillow>=10.0.0
-httpx>=0.25.0
-deep-translator>=1.11.0
-pytest>=7.0.0

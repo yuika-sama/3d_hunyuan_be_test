@@ -52,7 +52,7 @@ class TestUnifiedPipeline(unittest.IsolatedAsyncioTestCase):
         image.content_type = "image/svg+xml"
 
         with self.assertRaises(HTTPException) as error:
-            await gateway.process_all_pipeline(image, None)
+            await gateway.process_all_pipeline(image)
 
         self.assertEqual(error.exception.status_code, 415)
 
@@ -60,10 +60,6 @@ class TestUnifiedPipeline(unittest.IsolatedAsyncioTestCase):
         client = FakeClient(
             {
                 gateway.NSFW_URL: FakeResponse({"ok": True, "is_nsfw": False}),
-                gateway.CAPTION_URL: FakeResponse(
-                    {"caption": "Một chiếc ghế gỗ", "original_caption": "a wooden chair"}
-                ),
-                gateway.CUSTOM_URL: FakeResponse({"result": "Ghế gỗ sồi, bốn chân tròn"}),
                 gateway.THREED_URL: FakeResponse(content=b"glb-data"),
             }
         )
@@ -71,13 +67,13 @@ class TestUnifiedPipeline(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as output_dir, patch.object(
             gateway.httpx, "AsyncClient", return_value=client
         ), patch.object(gateway, "OUTPUT_DIR", Path(output_dir)):
-            result = await gateway.process_all_pipeline(upload(), None)
+            result = await gateway.process_all_pipeline(upload())
             model_path = Path(output_dir) / f"{result['task_id']}.glb"
             self.assertEqual(model_path.read_bytes(), b"glb-data")
 
         self.assertEqual(
             [call[0] for call in client.calls],
-            [gateway.NSFW_URL, gateway.CAPTION_URL, gateway.CUSTOM_URL, gateway.THREED_URL],
+            [gateway.NSFW_URL, gateway.THREED_URL],
         )
         self.assertEqual(result["results"]["model_3d"]["status"], "success")
 
@@ -86,7 +82,7 @@ class TestUnifiedPipeline(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(gateway.httpx, "AsyncClient", return_value=client):
             with self.assertRaises(HTTPException) as error:
-                await gateway.process_all_pipeline(upload(), None)
+                await gateway.process_all_pipeline(upload())
 
         self.assertEqual(error.exception.status_code, 400)
         self.assertEqual([call[0] for call in client.calls], [gateway.NSFW_URL])

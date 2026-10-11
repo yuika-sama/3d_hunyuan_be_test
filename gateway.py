@@ -123,9 +123,8 @@ async def custom_describe(image: UploadFile = File(...), prompt: str = Form("Mô
 @app.post("/pipeline/process-all")
 async def process_all_pipeline(
     image: UploadFile = File(...),
-    prompt: str | None = Form(None),
 ):
-    """Run safety, caption, detailed analysis, then textured 3D generation."""
+    """Run safety checks, then textured 3D generation."""
     image_bytes = await image.read()
     if not image_bytes:
         raise HTTPException(400, "Image is empty")
@@ -150,26 +149,6 @@ async def process_all_pipeline(
                 {"stage": "moderation", "error": "Image violates NSFW policy", "details": moderation},
             )
 
-        caption = await _post_json(
-            client,
-            CAPTION_URL,
-            "Caption",
-            files=files,
-            params={"max_new_tokens": 30},
-        )
-        short_text = caption.get("original_caption") or caption.get("caption") or "the main object"
-        analysis_prompt = prompt or (
-            "Phân tích vật thể để dựng mô hình 3D: hình khối, vật liệu, các mặt khuất, "
-            "chi tiết bề mặt và ánh sáng."
-        )
-        rich_prompt = await _post_json(
-            client,
-            CUSTOM_URL,
-            "Custom AI",
-            files=files,
-            data={"prompt": f"Mô tả ngắn: {short_text}. {analysis_prompt}"},
-        )
-
         try:
             model_response = await client.post(
                 THREED_URL,
@@ -192,8 +171,6 @@ async def process_all_pipeline(
         "task_id": str(task_id),
         "results": {
             "moderation": moderation,
-            "description": caption,
-            "rich_prompt": rich_prompt.get("result"),
             "model_3d": {
                 "status": "success",
                 "glb_url": f"/pipeline/result/{task_id}.glb",

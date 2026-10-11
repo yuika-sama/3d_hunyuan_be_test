@@ -1,11 +1,9 @@
 """
 Runpod Serverless Unified Worker Handler
-Supports 5 actions:
+Supports 3 actions:
 1. analyze: NSFW detection (CPU)
-2. caption: BLIP image captioning (CPU)
-3. custom_describe: LLaVA 7B via Ollama (GPU with immediate unload)
-4. generate3d: Hunyuan3D-2 geometry + texture generation (GPU with low-VRAM offloading)
-5. pipeline: NSFW -> BLIP -> LLaVA -> textured Hunyuan3D in one queued job
+2. generate3d: Hunyuan3D-2 geometry + texture generation (GPU with low-VRAM offloading)
+3. pipeline: NSFW -> textured Hunyuan3D in one queued job
 """
 
 import os
@@ -26,7 +24,6 @@ import traceback
 from typing import Any, Dict, Generator, Optional, Tuple
 
 from PIL import Image
-import httpx
 import runpod
 import torch
 import types
@@ -84,9 +81,6 @@ logging.basicConfig(
 logger = logging.getLogger("runpod_handler")
 
 # Constants & Configuration
-OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://127.0.0.1:11434")
-OLLAMA_MODEL_NAME = os.getenv("OLLAMA_MODEL_NAME", "llava:7b")
-BLIP_MODEL_NAME = os.getenv("BLIP_MODEL_NAME", "Salesforce/blip-image-captioning-large")
 NSFW_MODEL_NAME = os.getenv("NSFW_MODEL_NAME", "strangerguardhf/nsfw_image_detection")
 HUNYUAN_SHAPE_MODEL = os.getenv("HUNYUAN_SHAPE_MODEL", "tencent/Hunyuan3D-2.1")
 HUNYUAN_SHAPE_SUBFOLDER = os.getenv("HUNYUAN_SHAPE_SUBFOLDER", "hunyuan3d-dit-v2-1")
@@ -196,8 +190,6 @@ class ModelManager:
     def __init__(self):
         self.nsfw_processor = None
         self.nsfw_model = None
-        self.blip_processor = None
-        self.blip_model = None
         self.hunyuan_worker = None
 
     @classmethod
@@ -219,20 +211,6 @@ class ModelManager:
             self.nsfw_model.eval()
             logger.info("NSFW model loaded successfully on CPU.")
         return self.nsfw_processor, self.nsfw_model
-
-    def load_blip(self):
-        """Lazy load BLIP caption model on CPU."""
-        if self.blip_model is None:
-            logger.info(f"Loading BLIP model ({BLIP_MODEL_NAME}) on CPU...")
-            from transformers import BlipForConditionalGeneration, BlipProcessor
-
-            self.blip_processor = BlipProcessor.from_pretrained(BLIP_MODEL_NAME)
-            self.blip_model = BlipForConditionalGeneration.from_pretrained(
-                BLIP_MODEL_NAME
-            ).to("cpu")
-            self.blip_model.eval()
-            logger.info("BLIP model loaded successfully on CPU.")
-        return self.blip_processor, self.blip_model
 
     def load_shape_pipeline(self):
         """Lazy load rembg and shape pipeline with CPU offloading."""
@@ -326,21 +304,6 @@ class ModelManager:
             "tex_pipeline": tex_pipeline,
         }
 
-    @staticmethod
-    def unload_ollama(model_name: str = OLLAMA_MODEL_NAME):
-        """Force Ollama daemon to immediately unload the model from GPU VRAM."""
-        try:
-            with httpx.Client(timeout=5.0) as client:
-                res = client.post(
-                    f"{OLLAMA_API_URL}/api/generate",
-                    json={"model": model_name, "prompt": "", "keep_alive": 0},
-                )
-                logger.info(f"Ollama unload response status: {res.status_code}")
-        except Exception as e:
-            logger.warning(f"Could not contact Ollama daemon to unload model: {e}")
-        clean_vram()
-
-
 # Initialize singleton manager
 model_manager = ModelManager.get_instance()
 
@@ -401,163 +364,6 @@ def handle_analyze(
             "scores": scores,
             "top_label": top_label,
             "is_nsfw": is_nsfw,
-        },
-        "timings": {
-            "inference_ms": inference_ms,
-            "total_ms": total_ms,
-        },
-    }
-
-
-def handle_caption(
-    job_input: Dict[str, Any], start_time: float
-) -> Generator[Dict[str, Any], None, None]:
-    """Execute BLIP image captioning on CPU."""
-    yield {
-        "type": "progress",
-        "stage": "decode_input",
-        "elapsed_ms": int((time.time() - start_time) * 1000),
-    }
-
-    img_str = job_input.get("image_base64") or job_input.get("image")
-    pil_img, _ = decode_base64_image(img_str)
-    pil_img = pil_img.convert("RGB")
-    prompt = job_input.get("prompt")
-    max_tokens = int(job_input.get("max_new_tokens", 60))
-    min_tokens = int(job_input.get("min_new_tokens", 20))
-
-    yield {
-        "type": "progress",
-        "stage": "worker_init",
-        "elapsed_ms": int((time.time() - start_time) * 1000),
-    }
-
-    processor, model = model_manager.load_blip()
-
-    yield {
-        "type": "progress",
-        "stage": "caption_inference",
-        "elapsed_ms": int((time.time() - start_time) * 1000),
-    }
-
-    t0 = time.time()
-    with torch.no_grad():
-        if prompt:
-            inputs = processor(pil_img, text=prompt, return_tensors="pt").to("cpu")
-        else:
-            inputs = processor(pil_img, return_tensors="pt").to("cpu")
-
-        out = model.generate(
-            **inputs,
-            max_new_tokens=max_tokens,
-            min_new_tokens=min_tokens,
-            num_beams=3,
-        )
-        caption = processor.decode(out[0], skip_special_tokens=True).strip()
-
-    inference_ms = int((time.time() - t0) * 1000)
-    total_ms = int((time.time() - start_time) * 1000)
-
-    yield {
-        "type": "result",
-        "action": "caption",
-        "data": {
-            "ok": True,
-            "caption": caption,
-        },
-        "timings": {
-            "inference_ms": inference_ms,
-            "total_ms": total_ms,
-        },
-    }
-
-
-def handle_custom_describe(
-    job_input: Dict[str, Any], start_time: float
-) -> Generator[Dict[str, Any], None, None]:
-    """Execute Ollama LLaVA 7B custom description with GPU unload."""
-    yield {
-        "type": "progress",
-        "stage": "decode_input",
-        "elapsed_ms": int((time.time() - start_time) * 1000),
-    }
-
-    img_str = job_input.get("image_base64") or job_input.get("image")
-    _, raw_img_bytes = decode_base64_image(img_str)
-    b64_clean = base64.b64encode(raw_img_bytes).decode("utf-8")
-
-    user_prompt = job_input.get("prompt", "Mô tả ảnh này")
-    model_name = job_input.get("model", OLLAMA_MODEL_NAME)
-
-    yield {
-        "type": "progress",
-        "stage": "preprocess",
-        "elapsed_ms": int((time.time() - start_time) * 1000),
-    }
-
-    # Translate Prompt to English if needed
-    translated_prompt = user_prompt
-    try:
-        from deep_translator import GoogleTranslator
-
-        translated_prompt = GoogleTranslator(source="auto", target="en").translate(
-            user_prompt
-        )
-    except Exception as e:
-        logger.warning(f"Translation to English failed, using original prompt: {e}")
-
-    full_prompt = f"Describe this image in detail and fulfill this request: {translated_prompt}"
-
-    yield {
-        "type": "progress",
-        "stage": "llava_inference",
-        "elapsed_ms": int((time.time() - start_time) * 1000),
-        "vram": get_vram_info(),
-    }
-
-    t0 = time.time()
-    try:
-        with httpx.Client(timeout=180.0) as client:
-            res = client.post(
-                f"{OLLAMA_API_URL}/api/generate",
-                json={
-                    "model": model_name,
-                    "prompt": full_prompt,
-                    "images": [b64_clean],
-                    "stream": False,
-                },
-            )
-            if res.status_code != 200:
-                raise RuntimeError(
-                    f"Ollama error (HTTP {res.status_code}): {res.text}"
-                )
-            english_result = res.json().get("response", "").strip()
-    finally:
-        # Guarantee unload
-        model_manager.unload_ollama(model_name)
-
-    inference_ms = int((time.time() - t0) * 1000)
-
-    # Translate result back to Vietnamese if requested or preserve English
-    vietnamese_result = english_result
-    try:
-        from deep_translator import GoogleTranslator
-
-        vietnamese_result = GoogleTranslator(source="en", target="vi").translate(
-            english_result
-        )
-    except Exception as e:
-        logger.warning(f"Translation back to Vietnamese failed: {e}")
-
-    total_ms = int((time.time() - start_time) * 1000)
-
-    yield {
-        "type": "result",
-        "action": "custom_describe",
-        "data": {
-            "ok": True,
-            "description": vietnamese_result,
-            "description_en": english_result,
         },
         "timings": {
             "inference_ms": inference_ms,
@@ -818,7 +624,7 @@ def handle_generate3d(
 def handle_pipeline(
     job_input: Dict[str, Any], start_time: float
 ) -> Generator[Dict[str, Any], None, None]:
-    """Run moderation, captioning, visual analysis, and textured 3D in one queued job."""
+    """Run moderation and textured 3D generation in one queued job."""
     moderation = None
     for event in handle_analyze(job_input, start_time):
         if event.get("type") == "result":
@@ -839,49 +645,10 @@ def handle_pipeline(
         }
         return
 
-    caption_input = {**job_input, "max_new_tokens": 30, "min_new_tokens": 5}
-    caption = None
-    for event in handle_caption(caption_input, start_time):
-        if event.get("type") == "result":
-            caption = event["data"]
-        else:
-            if event.get("type") == "progress":
-                event = {**event, "stage": f"caption.{event['stage']}"}
-            yield event
-
-    if not caption:
-        raise RuntimeError("Caption stage returned no result.")
-
-    short_text = caption.get("caption") or "the main object"
-    analysis_request = job_input.get("prompt") or (
-        "Phân tích vật thể để dựng mô hình 3D: hình khối, vật liệu, các mặt khuất, "
-        "chi tiết bề mặt và ánh sáng."
-    )
-    describe_input = {
-        **job_input,
-        "prompt": f"Mô tả ngắn: {short_text}. {analysis_request}",
-    }
-    description = None
-    for event in handle_custom_describe(describe_input, start_time):
-        if event.get("type") == "result":
-            description = event["data"]
-        else:
-            if event.get("type") == "progress":
-                event = {**event, "stage": f"analysis.{event['stage']}"}
-            yield event
-
-    if not description:
-        raise RuntimeError("Visual analysis stage returned no result.")
-
     yield {
         "type": "result",
         "action": "pipeline",
-        "data": {
-            "moderation": moderation,
-            "description": caption,
-            "rich_prompt": description.get("description"),
-            "rich_prompt_en": description.get("description_en"),
-        },
+        "data": {"moderation": moderation},
     }
 
     generate_input = {**job_input, "texture": True, "texture_resolution": 1024}
@@ -912,7 +679,7 @@ def handler(job: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
         yield {
             "type": "error",
             "stage": "validate_input",
-            "error": "Missing required field 'action' in input. Expected: analyze, caption, custom_describe, generate3d, pipeline.",
+            "error": "Missing required field 'action' in input. Expected: analyze, generate3d, pipeline.",
             "timings": {"total_ms": 0},
         }
         return
@@ -922,10 +689,6 @@ def handler(job: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
     try:
         if action == "analyze":
             yield from handle_analyze(job_input, start_time)
-        elif action == "caption":
-            yield from handle_caption(job_input, start_time)
-        elif action == "custom_describe":
-            yield from handle_custom_describe(job_input, start_time)
         elif action == "generate3d":
             yield from handle_generate3d(job_input, start_time)
         elif action == "pipeline":
@@ -934,7 +697,7 @@ def handler(job: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
             yield {
                 "type": "error",
                 "stage": "validate_input",
-                "error": f"Invalid action '{action}'. Supported actions: analyze, caption, custom_describe, generate3d, pipeline.",
+                "error": f"Invalid action '{action}'. Supported actions: analyze, generate3d, pipeline.",
                 "timings": {"total_ms": int((time.time() - start_time) * 1000)},
             }
     except Exception as e:

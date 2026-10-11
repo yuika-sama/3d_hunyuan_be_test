@@ -1,11 +1,9 @@
-# Dockerfile for Runpod Serverless Unified Worker (CUDA 12.1 + PyTorch + Ollama LLaVA + Hunyuan3D)
+# Dockerfile for Runpod Serverless Hunyuan3D Worker (CUDA 12.1 + PyTorch)
 FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
-    OLLAMA_HOST=0.0.0.0:11434 \
-    OLLAMA_MODELS=/root/.ollama/models \
     TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0+PTX" \
     FORCE_CUDA="1" \
     MAX_JOBS="1" \
@@ -19,7 +17,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.10-dev \
     python3-pip \
     git \
-    curl \
     wget \
     ffmpeg \
     libgl1 \
@@ -46,17 +43,6 @@ RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel && \
     pip3 install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121 && \
     rm -rf /root/.cache/pip
 
-# Install Ollama CLI and daemon
-RUN curl -fsSL https://ollama.com/install.sh | sh
-
-# Pre-download LLaVA 7B model into Docker image layer
-RUN ollama serve & \
-    PID=$! && \
-    for i in $(seq 1 30); do curl -s http://127.0.0.1:11434/api/tags > /dev/null 2>&1 && break || sleep 1; done && \
-    ollama pull llava:7b && \
-    kill $PID && \
-    wait $PID || true
-
 WORKDIR /app
 
 # Copy dependency definitions and install Python packages
@@ -81,7 +67,6 @@ RUN python3 /app/preload_models.py && \
 
 # Copy application handler and entrypoint (code changes here will NOT bust cache above)
 COPY runpod_handler.py /app/runpod_handler.py
-COPY test_handler.py /app/test_handler.py
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
