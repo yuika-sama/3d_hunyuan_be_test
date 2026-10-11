@@ -137,9 +137,10 @@ class TestRunpodHandler(unittest.TestCase):
     @patch.object(runpod_handler, "handle_generate3d")
     @patch.object(runpod_handler, "handle_analyze")
     def test_handler_pipeline_runs_all_stages(self, mock_analyze, mock_generate3d):
-        mock_analyze.return_value = iter(
-            [{"type": "result", "action": "analyze", "data": {"is_nsfw": False}}]
-        )
+        mock_analyze.side_effect = [
+            iter([{"type": "result", "action": "analyze", "data": {"is_nsfw": False}}]),
+            iter([{"type": "result", "action": "analyze", "data": {"is_nsfw": False}}]),
+        ]
         mock_generate3d.return_value = iter(
             [
                 {"type": "file_meta", "name": "model.glb", "chunks": 1},
@@ -148,11 +149,17 @@ class TestRunpodHandler(unittest.TestCase):
             ]
         )
 
-        events = list(handler({"input": {"action": "pipeline", "image_base64": self.dummy_b64}}))
+        events = list(handler({"input": {
+            "action": "pipeline",
+            "image_base64": self.dummy_b64,
+            "texture_image_base64": self.dummy_b64,
+        }}))
 
         result = next(event for event in events if event.get("action") == "pipeline")
         self.assertFalse(result["data"]["moderation"]["is_nsfw"])
+        self.assertFalse(result["data"]["texture_moderation"]["is_nsfw"])
         self.assertTrue(any(event.get("type") == "file_chunk" for event in events))
+        self.assertEqual(mock_analyze.call_count, 2)
         mock_generate3d.assert_called_once()
         self.assertTrue(mock_generate3d.call_args.args[0]["texture"])
 
@@ -167,6 +174,24 @@ class TestRunpodHandler(unittest.TestCase):
 
         error = next(event for event in events if event.get("type") == "error")
         self.assertEqual(error["stage"], "moderation")
+        mock_generate3d.assert_not_called()
+
+    @patch.object(runpod_handler, "handle_generate3d")
+    @patch.object(runpod_handler, "handle_analyze")
+    def test_handler_pipeline_stops_on_texture_nsfw(self, mock_analyze, mock_generate3d):
+        mock_analyze.side_effect = [
+            iter([{"type": "result", "action": "analyze", "data": {"is_nsfw": False}}]),
+            iter([{"type": "result", "action": "analyze", "data": {"is_nsfw": True}}]),
+        ]
+
+        events = list(handler({"input": {
+            "action": "pipeline",
+            "image_base64": self.dummy_b64,
+            "texture_image_base64": self.dummy_b64,
+        }}))
+
+        error = next(event for event in events if event.get("type") == "error")
+        self.assertEqual(error["stage"], "texture_moderation")
         mock_generate3d.assert_not_called()
 
     @patch.object(runpod_handler.model_manager, "load_nsfw")
@@ -209,7 +234,7 @@ class TestRunpodHandler(unittest.TestCase):
 
         mock_mesh.export.side_effect = mock_export
 
-        mock_rembg = MagicMock(return_value=Image.new("RGB", (64, 64)))
+        mock_rembg = MagicMock(side_effect=lambda image: image)
         mock_shape_pipe = MagicMock()
         mock_shape_pipe.return_value = [mock_mesh]
         mock_tex_pipe = MagicMock()
@@ -293,7 +318,7 @@ class TestRunpodHandler(unittest.TestCase):
         mock_mesh.visual.kind = "texture"
         mock_mesh.export.side_effect = lambda f, file_type: f.write(fake_glb_bytes)
 
-        mock_rembg = MagicMock(return_value=Image.new("RGB", (64, 64)))
+        mock_rembg = MagicMock(side_effect=lambda image: image)
         mock_shape_pipe = MagicMock()
         mock_shape_pipe.return_value = [mock_mesh]
         mock_tex_pipe = MagicMock()
@@ -323,6 +348,7 @@ class TestRunpodHandler(unittest.TestCase):
                 "input": {
                     "action": "generate3d",
                     "image_base64": self.dummy_b64,
+                    "texture_image_base64": create_dummy_image_b64(color=(0, 0, 255)),
                     "texture": True,
                 }
             }
@@ -333,6 +359,10 @@ class TestRunpodHandler(unittest.TestCase):
         mock_move.assert_called_once()
         mock_offload.assert_called_once()
         mock_tex_pipe.assert_called_once()
+        self.assertEqual(
+            mock_tex_pipe.call_args.args[1].getpixel((0, 0)),
+            (0, 0, 255),
+        )
 
     @patch.object(runpod_handler, "HUNYUAN_USE_FLASHVDM", True)
     @patch.object(runpod_handler.model_manager, "load_hunyuan")
@@ -464,6 +494,7 @@ class TestRunpodHandler(unittest.TestCase):
                 "input": {
                     "action": "generate3d",
                     "image_base64": self.dummy_b64,
+                    "texture_image_base64": self.dummy_b64,
                     "texture": True,
                 }
             }

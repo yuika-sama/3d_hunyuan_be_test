@@ -393,6 +393,10 @@ def handle_generate3d(
     guidance = float(job_input.get("guidance_scale", 5.0))
     face_count = int(job_input.get("face_count", DEFAULT_FACE_COUNT))
     enable_texture = bool(job_input.get("texture", True))
+    texture_img = None
+    if enable_texture:
+        texture_str = job_input.get("texture_image_base64") or job_input.get("texture_image")
+        texture_img, _ = decode_base64_image(texture_str)
 
     logger.info(
         "Shape config: model=%s subfolder=%s decoder=%s seed=%d octree=%d steps=%d guidance=%s faces=%d",
@@ -428,6 +432,7 @@ def handle_generate3d(
     }
     t_prep_start = time.time()
     image_no_bg = prepare_shape_image(pil_img, rembg)
+    texture_image_no_bg = prepare_shape_image(texture_img, rembg) if texture_img else None
     prep_ms = int((time.time() - t_prep_start) * 1000)
 
     # 2. Shape generation
@@ -547,7 +552,7 @@ def handle_generate3d(
                     "elapsed_ms": int((time.time() - start_time) * 1000),
                     "vram": get_vram_info(),
                 }
-                textured_mesh = tex_pipeline(mesh, image_no_bg)
+                textured_mesh = tex_pipeline(mesh, texture_image_no_bg)
                 if (
                     textured_mesh is not None
                     and getattr(getattr(textured_mesh, "visual", None), "kind", None) == "texture"
@@ -645,10 +650,33 @@ def handle_pipeline(
         }
         return
 
+    texture_input = {
+        **job_input,
+        "image_base64": job_input.get("texture_image_base64"),
+        "image": job_input.get("texture_image"),
+    }
+    texture_moderation = None
+    for event in handle_analyze(texture_input, start_time):
+        if event.get("type") == "result":
+            texture_moderation = event["data"]
+        elif event.get("type") == "progress":
+            yield {**event, "stage": f"texture_moderation.{event['stage']}"}
+
+    if not texture_moderation:
+        raise RuntimeError("Texture NSFW stage returned no result.")
+    if texture_moderation.get("is_nsfw"):
+        yield {
+            "type": "error",
+            "stage": "texture_moderation",
+            "error": "Texture image violates NSFW policy.",
+            "data": texture_moderation,
+        }
+        return
+
     yield {
         "type": "result",
         "action": "pipeline",
-        "data": {"moderation": moderation},
+        "data": {"moderation": moderation, "texture_moderation": texture_moderation},
     }
 
     generate_input = {**job_input, "texture": True, "texture_resolution": 1024}

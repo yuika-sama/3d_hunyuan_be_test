@@ -75,8 +75,12 @@ async def caption(
 
 # ---------- 3D ----------
 @app.post("/generate3d")
-async def generate3d(image: UploadFile = File(...)):
+async def generate3d(
+    image: UploadFile = File(...),
+    texture_image: UploadFile = File(...),
+):
     raw = await image.read()
+    texture_raw = await texture_image.read()
     
     # 1. Chuyển sang Base64
     base64_str = base64.b64encode(raw).decode("utf-8")
@@ -84,6 +88,7 @@ async def generate3d(image: UploadFile = File(...)):
     # 2. Đóng gói JSON
     payload = {
         "image": base64_str,
+        "texture_image": base64.b64encode(texture_raw).decode("utf-8"),
         "texture": True,  # <--- Thêm dòng này để yêu cầu vẽ màu
         "texture_resolution": 1024 # (Tùy chọn) Độ phân giải texture
     }
@@ -123,6 +128,7 @@ async def custom_describe(image: UploadFile = File(...), prompt: str = Form("Mô
 @app.post("/pipeline/process-all")
 async def process_all_pipeline(
     image: UploadFile = File(...),
+    texture_image: UploadFile = File(...),
 ):
     """Run safety checks, then textured 3D generation."""
     image_bytes = await image.read()
@@ -133,11 +139,26 @@ async def process_all_pipeline(
     if len(image_bytes) > 20 * 1024 * 1024:
         raise HTTPException(413, "Image exceeds the 20 MB limit")
 
+    texture_image_bytes = await texture_image.read()
+    if not texture_image_bytes:
+        raise HTTPException(400, "Texture image is empty")
+    if texture_image.content_type not in {"image/jpeg", "image/png"}:
+        raise HTTPException(415, "Texture image must be JPEG or PNG")
+    if len(texture_image_bytes) > 20 * 1024 * 1024:
+        raise HTTPException(413, "Texture image exceeds the 20 MB limit")
+
     files = {
         "image": (
             image.filename or "image.png",
             image_bytes,
             image.content_type or "application/octet-stream",
+        )
+    }
+    texture_files = {
+        "image": (
+            texture_image.filename or "texture.png",
+            texture_image_bytes,
+            texture_image.content_type or "application/octet-stream",
         )
     }
 
@@ -149,11 +170,23 @@ async def process_all_pipeline(
                 {"stage": "moderation", "error": "Image violates NSFW policy", "details": moderation},
             )
 
+        texture_moderation = await _post_json(client, NSFW_URL, "NSFW", files=texture_files)
+        if texture_moderation.get("is_nsfw", False):
+            raise HTTPException(
+                400,
+                {
+                    "stage": "texture_moderation",
+                    "error": "Texture image violates NSFW policy",
+                    "details": texture_moderation,
+                },
+            )
+
         try:
             model_response = await client.post(
                 THREED_URL,
                 json={
                     "image": base64.b64encode(image_bytes).decode("utf-8"),
+                    "texture_image": base64.b64encode(texture_image_bytes).decode("utf-8"),
                     "texture": True,
                     "texture_resolution": 1024,
                 },
@@ -171,6 +204,7 @@ async def process_all_pipeline(
         "task_id": str(task_id),
         "results": {
             "moderation": moderation,
+            "texture_moderation": texture_moderation,
             "model_3d": {
                 "status": "success",
                 "glb_url": f"/pipeline/result/{task_id}.glb",

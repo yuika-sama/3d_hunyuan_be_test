@@ -209,6 +209,13 @@ class ModelWorker:
     @torch.inference_mode()
     def generate(self, uid, params):
         # 1. Xử lý đầu vào
+        texture_image = None
+        if params.get('texture', False) or params.get('do_texture', False):
+            texture_image_base64 = params.pop('texture_image', None)
+            if not texture_image_base64:
+                raise ValueError("No texture image provided")
+            texture_image = self.rembg(load_image_from_base64(texture_image_base64))
+
         if 'image' in params:
             image = params["image"]
             image = load_image_from_base64(image)
@@ -276,7 +283,7 @@ class ModelWorker:
                     self.pipeline_tex.text_encoder.to(self.device)
                 
                 print(">>> [Texture] Painting...")
-                mesh = self.pipeline_tex(mesh, image) 
+                mesh = self.pipeline_tex(mesh, texture_image)
                 
                 print(">>> [Texture] Unloading Paint parts to CPU...")
                 # Chuyển ngược lại về CPU

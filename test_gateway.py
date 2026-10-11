@@ -35,7 +35,8 @@ class FakeClient:
 
     async def post(self, url, **kwargs):
         self.calls.append((url, kwargs))
-        return self.responses[url]
+        response = self.responses[url]
+        return response.pop(0) if isinstance(response, list) else response
 
 
 def upload(content=b"image-bytes"):
@@ -52,7 +53,7 @@ class TestUnifiedPipeline(unittest.IsolatedAsyncioTestCase):
         image.content_type = "image/svg+xml"
 
         with self.assertRaises(HTTPException) as error:
-            await gateway.process_all_pipeline(image)
+            await gateway.process_all_pipeline(image, upload())
 
         self.assertEqual(error.exception.status_code, 415)
 
@@ -67,25 +68,57 @@ class TestUnifiedPipeline(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as output_dir, patch.object(
             gateway.httpx, "AsyncClient", return_value=client
         ), patch.object(gateway, "OUTPUT_DIR", Path(output_dir)):
-            result = await gateway.process_all_pipeline(upload())
+            result = await gateway.process_all_pipeline(upload(b"shape"), upload(b"texture"))
             model_path = Path(output_dir) / f"{result['task_id']}.glb"
             self.assertEqual(model_path.read_bytes(), b"glb-data")
 
         self.assertEqual(
             [call[0] for call in client.calls],
-            [gateway.NSFW_URL, gateway.THREED_URL],
+            [gateway.NSFW_URL, gateway.NSFW_URL, gateway.THREED_URL],
         )
         self.assertEqual(result["results"]["model_3d"]["status"], "success")
+        model_payload = client.calls[-1][1]["json"]
+        self.assertEqual(model_payload["image"], "c2hhcGU=")
+        self.assertEqual(model_payload["texture_image"], "dGV4dHVyZQ==")
 
     async def test_process_all_stops_after_nsfw_rejection(self):
         client = FakeClient({gateway.NSFW_URL: FakeResponse({"is_nsfw": True})})
 
         with patch.object(gateway.httpx, "AsyncClient", return_value=client):
             with self.assertRaises(HTTPException) as error:
-                await gateway.process_all_pipeline(upload())
+                await gateway.process_all_pipeline(upload(), upload())
 
         self.assertEqual(error.exception.status_code, 400)
         self.assertEqual([call[0] for call in client.calls], [gateway.NSFW_URL])
+
+    async def test_process_all_stops_after_texture_nsfw_rejection(self):
+        client = FakeClient({
+            gateway.NSFW_URL: [
+                FakeResponse({"is_nsfw": False}),
+                FakeResponse({"is_nsfw": True}),
+            ]
+        })
+
+        with patch.object(gateway.httpx, "AsyncClient", return_value=client):
+            with self.assertRaises(HTTPException) as error:
+                await gateway.process_all_pipeline(upload(), upload())
+
+        self.assertEqual(error.exception.detail["stage"], "texture_moderation")
+        self.assertEqual(
+            [call[0] for call in client.calls],
+            [gateway.NSFW_URL, gateway.NSFW_URL],
+        )
+
+    async def test_generate3d_sends_shape_and_texture_separately(self):
+        client = FakeClient({gateway.THREED_URL: FakeResponse(content=b"glb-data")})
+
+        with patch.object(gateway.httpx, "AsyncClient", return_value=client):
+            response = await gateway.generate3d(upload(b"shape"), upload(b"texture"))
+
+        self.assertEqual(response.body, b"glb-data")
+        payload = client.calls[0][1]["json"]
+        self.assertEqual(payload["image"], "c2hhcGU=")
+        self.assertEqual(payload["texture_image"], "dGV4dHVyZQ==")
 
 
 if __name__ == "__main__":

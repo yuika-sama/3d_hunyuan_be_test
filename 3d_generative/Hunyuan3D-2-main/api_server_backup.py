@@ -185,6 +185,13 @@ class ModelWorker:
 
     @torch.inference_mode()
     def generate(self, uid, params):
+        texture_image = None
+        if params.get('texture', False):
+            texture_image_base64 = params.pop('texture_image', None)
+            if not texture_image_base64:
+                raise ValueError("No texture image provided")
+            texture_image = self.rembg(load_image_from_base64(texture_image_base64))
+
         if 'image' in params:
             image = params["image"]
             image = load_image_from_base64(image)
@@ -216,7 +223,7 @@ class ModelWorker:
             mesh = FloaterRemover()(mesh)
             mesh = DegenerateFaceRemover()(mesh)
             mesh = FaceReducer()(mesh, max_facenum=params.get('face_count', 40000))
-            mesh = self.pipeline_tex(mesh, image)
+            mesh = self.pipeline_tex(mesh, texture_image)
 
         type = params.get('type', 'glb')
         with tempfile.NamedTemporaryFile(suffix=f'.{type}', delete=False) as temp_file:

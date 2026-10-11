@@ -8,7 +8,8 @@ Hệ thống dịch vụ chuyển đổi hình ảnh 2D thành mô hình 3D hoà
 
 ```mermaid
 flowchart TD
-    A["📸 2D Image Input (Base64)"] --> B{"Ảnh đã có alpha?"}
+    A["📸 Ảnh vật thể (Base64)"] --> B{"Ảnh đã có alpha?"}
+    A2["🎨 Ảnh texture (Base64)"] --> B3["✂️ Giữ alpha hoặc rembg"]
     B -->|Có| C["Giữ nguyên silhouette RGBA"]
     B -->|Không| B2["✂️ rembg (U2-Net)"]
     B2 --> C
@@ -25,6 +26,7 @@ flowchart TD
     end
 
     subgraph TG ["🔶 Stage 2: Texture Generation (Paint Turbo)"]
+        B3 --> I
         H --> I["💡 Delight: Light_Shadow_Remover (SD InstructPix2Pix)"]
         I --> J["🗺️ UV Unwrapping (xatlas C++)"]
         J --> K["🎥 Differentiable Normal/Position Rendering"]
@@ -53,12 +55,12 @@ flowchart TD
 
 | Lớp | Mục đích | Dữ liệu chuyển sang lớp sau / ảnh hưởng tới 3D |
 | :--- | :--- | :--- |
-| NSFW (`analyze`) | Chặn ảnh không phù hợp trước khi dùng các model nặng | Nếu bị chặn, toàn bộ pipeline dừng. Nếu đạt, ảnh gốc đi tiếp; score không đổi shape. |
+| NSFW (`analyze`) | Chặn ảnh không phù hợp trước khi dùng các model nặng | Pipeline kiểm tra riêng ảnh vật thể và ảnh texture; một trong hai bị chặn thì toàn bộ pipeline dừng. |
 | Alpha/rembg + recenter | Tách silhouette, căn vật thể giữa khung 512×512 | Đây là đầu vào trực tiếp của shape model; mất tai/chân ở mask thì các lớp sau không thể khôi phục. PNG đã có alpha được giữ nguyên để tránh tách nền lần hai. |
 | Shape DiT | Suy diễn latent 3D từ một ảnh | Quyết định cấu trúc lớn và các mặt khuất; seed, steps và guidance tác động tại đây. |
 | VAE + Marching Cubes | Giải latent thành bề mặt tam giác | `octree_resolution` quyết định độ mịn không gian; không thể tạo lại chi tiết mà DiT không sinh. |
 | Mesh cleanup | Bỏ mặt lỗi rồi giới hạn số face | Làm mesh ổn định cho texture; không tự xóa các component nhỏ có thể là tai, móng hoặc đuôi. |
-| Texture pipeline | Trải UV, tạo sáu view, bake và inpaint màu | Chỉ đổi vật liệu/màu trên mesh có sẵn, không sửa hình học bị thiếu. |
+| Texture pipeline | Dùng ảnh texture để trải UV, tạo sáu view, bake và inpaint màu | Chỉ đổi vật liệu/màu trên mesh có sẵn, không sửa hình học bị thiếu. |
 | GLB export/stream | Đóng gói mesh + texture, checksum và chia chunk | Không đổi nội dung 3D; chỉ ảnh hưởng cách client nhận và kiểm tra file. |
 
 BLIP và LLaVA đã được bỏ khỏi worker vì output văn bản của chúng không điều khiển geometry hoặc texture. Hai đầu vào quyết định trực tiếp nhất tới shape là silhouette sau tiền xử lý và checkpoint/seed của Shape DiT.
@@ -152,7 +154,7 @@ Base URL: `https://api.runpod.ai/v2/{ENDPOINT_ID}`. Mọi request dùng header `
 | `generate3d` | Sinh shape, mesh và texture | Các tham số tại mục 4.2 | Chuỗi event và các chunk GLB |
 | `pipeline` | Chạy NSFW rồi sinh 3D có texture | Các tham số shape | Kết quả moderation, sau đó các chunk GLB |
 
-Tất cả action yêu cầu `image_base64` hoặc alias `image`. Giá trị có thể là Base64 thuần hoặc data URI; dung lượng sau decode tối đa 25 MB. Nên dùng `POST /run` rồi đọc `GET /stream/{JOB_ID}` cho `generate3d` và `pipeline`; `/runsync` phù hợp với `analyze`.
+Tất cả action yêu cầu `image_base64` hoặc alias `image` làm ảnh sinh shape. `generate3d` khi bật texture và `pipeline` yêu cầu thêm `texture_image_base64` hoặc alias `texture_image`. Giá trị có thể là Base64 thuần hoặc data URI; mỗi ảnh sau decode tối đa 25 MB. Nên dùng `POST /run` rồi đọc `GET /stream/{JOB_ID}` cho `generate3d` và `pipeline`; `/runsync` phù hợp với `analyze`.
 
 ```bash
 curl -X POST "https://api.runpod.ai/v2/${ENDPOINT_ID}/run" \
@@ -166,7 +168,8 @@ curl -X POST "https://api.runpod.ai/v2/${ENDPOINT_ID}/run" \
 | Field | Kiểu | Bắt buộc | Mặc định | Ý nghĩa |
 | :--- | :--- | :---: | :--- | :--- |
 | `action` | string | Có | — | Phải là `generate3d` |
-| `image_base64` / `image` | string | Có | — | Ảnh nguồn Base64 hoặc data URI |
+| `image_base64` / `image` | string | Có | — | Ảnh vật thể dùng để sinh shape |
+| `texture_image_base64` / `texture_image` | string | Khi `texture=true` | — | Ảnh tham chiếu dùng để sinh texture |
 | `seed` | integer | Không | `1234` | Seed tái lập kết quả |
 | `octree_resolution` | integer | Không | `384` | Độ phân giải giải mã thể tích; tăng giá trị làm tăng thời gian và VRAM |
 | `num_inference_steps` | integer | Không | `50` | Số bước lấy mẫu shape; mặc định là `5` nếu worker được cấu hình với checkpoint Turbo |
@@ -179,6 +182,7 @@ curl -X POST "https://api.runpod.ai/v2/${ENDPOINT_ID}/run" \
   "input": {
     "action": "generate3d",
     "image_base64": "data:image/png;base64,iVBORw0KGgo...",
+    "texture_image_base64": "data:image/png;base64,iVBORw0KGgo...",
     "octree_resolution": 384,
     "num_inference_steps": 50,
     "guidance_scale": 5.0,
@@ -211,6 +215,7 @@ Các stage chính của `generate3d`: `decode_input`, `worker_init`, `preprocess
   "input": {
     "action": "pipeline",
     "image_base64": "data:image/png;base64,iVBORw0KGgo...",
+    "texture_image_base64": "data:image/png;base64,iVBORw0KGgo...",
     "octree_resolution": 384,
     "num_inference_steps": 50,
     "face_count": 200000
@@ -234,15 +239,16 @@ Base URL mặc định: `http://127.0.0.1:4000`. FastAPI cung cấp Swagger UI t
 | `POST` | `/analyze` | multipart `image` | JSON kết quả NSFW |
 | `POST` | `/caption` | multipart `image`; form `prompt`, `max_new_tokens`, `min_new_tokens` | JSON caption |
 | `POST` | `/custom_describe` | multipart `image`; form `prompt` | JSON mô tả |
-| `POST` | `/generate3d` | multipart `image` | Binary `model/gltf-binary` |
-| `POST` | `/pipeline/process-all` | JPEG/PNG multipart `image` ≤ 20 MB | JSON chứa `task_id` và `glb_url` |
+| `POST` | `/generate3d` | multipart `image` + `texture_image` | Binary `model/gltf-binary` |
+| `POST` | `/pipeline/process-all` | JPEG/PNG multipart `image` + `texture_image`, mỗi ảnh ≤ 20 MB | JSON chứa `task_id` và `glb_url` |
 | `GET` | `/pipeline/result/{task_id}.glb` | UUID từ pipeline | Binary GLB |
 
 `/generate3d` của local gateway chưa expose các tham số quality; nó dùng mặc định của backend 3D. Pipeline đầy đủ:
 
 ```bash
 curl -X POST http://127.0.0.1:4000/pipeline/process-all \
-  -F "image=@chair.png"
+  -F "image=@chair-shape.png" \
+  -F "texture_image=@chair-texture.png"
 ```
 
 ```json
