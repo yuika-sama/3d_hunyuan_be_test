@@ -85,15 +85,16 @@ class Hunyuan3DPaintPipeline:
     def from_pretrained(cls, model_path, subfolder=None, **config_kwargs):
         if subfolder is None:
             subfolder = os.environ.get('HUNYUAN_TEX_SUBFOLDER', 'hunyuan3d-paint-v2-0')
-        required_weights = (
+        required_weights = [
             os.path.join(subfolder, 'unet', 'diffusion_pytorch_model.bin'),
             os.path.join(subfolder, 'vae', 'diffusion_pytorch_model.bin'),
             os.path.join(subfolder, 'text_encoder', 'pytorch_model.bin'),
-            os.path.join(subfolder, 'image_encoder', 'model.safetensors'),
             os.path.join('hunyuan3d-delight-v2-0', 'unet', 'diffusion_pytorch_model.safetensors'),
             os.path.join('hunyuan3d-delight-v2-0', 'vae', 'diffusion_pytorch_model.safetensors'),
             os.path.join('hunyuan3d-delight-v2-0', 'text_encoder', 'model.safetensors'),
-        )
+        ]
+        if 'turbo' in subfolder.lower():
+            required_weights.append(os.path.join(subfolder, 'image_encoder', 'model.safetensors'))
 
         def has_required_weights(root):
             return all(

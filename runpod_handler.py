@@ -306,7 +306,21 @@ class ModelManager:
             logger.info("Texture pipeline loaded and offloaded to CPU.")
         except Exception as e:
             logger.error(f"Failed to load texture model: {e}\n{traceback.format_exc()}")
-            self.hunyuan_worker["tex_pipeline"] = None
+            if target_subfolder != "hunyuan3d-paint-v2-0-turbo":
+                logger.warning("Attempting fallback to 'hunyuan3d-paint-v2-0-turbo'...")
+                try:
+                    tex_pipeline = Hunyuan3DPaintPipeline.from_pretrained(
+                        HUNYUAN_TEX_MODEL, subfolder="hunyuan3d-paint-v2-0-turbo"
+                    )
+                    tex_pipeline._loaded_subfolder = "hunyuan3d-paint-v2-0-turbo"
+                    self.offload_tex_pipeline(tex_pipeline)
+                    self.hunyuan_worker["tex_pipeline"] = tex_pipeline
+                    logger.info("Fallback turbo texture pipeline loaded and offloaded to CPU.")
+                except Exception as e2:
+                    logger.error(f"Fallback turbo texture model also failed: {e2}")
+                    self.hunyuan_worker["tex_pipeline"] = None
+            else:
+                self.hunyuan_worker["tex_pipeline"] = None
 
         return self.hunyuan_worker.get("tex_pipeline")
 
