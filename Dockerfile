@@ -1,12 +1,13 @@
+# syntax=docker/dockerfile:1.4
 # Dockerfile for Runpod Serverless Hunyuan3D Worker (CUDA 12.1 + PyTorch)
 FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
     TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0+PTX" \
     FORCE_CUDA="1" \
-    MAX_JOBS="1" \
     HF_HUB_DISABLE_XET="1" \
     HF_HUB_ENABLE_HF_TRANSFER="0" \
     PYTHONPATH="/app:/app/3d_generative/Hunyuan3D-2-main"
@@ -18,9 +19,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     git \
     wget \
+    curl \
     ffmpeg \
     libgl1 \
-    libgl1-mesa-glx \
     libgl1-mesa-dev \
     libglu1-mesa \
     libglib2.0-0 \
@@ -38,32 +39,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN ln -sf /usr/bin/python3.10 /usr/bin/python && \
     ln -sf /usr/bin/python3.10 /usr/bin/python3
 
-# Install PyTorch with CUDA 12.1
-RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip3 install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121 && \
-    rm -rf /root/.cache/pip
-
 WORKDIR /app
 
-# Copy dependency definitions and install Python packages
+# Upgrade pip & install PyTorch with CUDA 12.1
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip3 install --upgrade pip setuptools wheel && \
+    pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+# Install requirements-runpod.txt
 COPY requirements-runpod.txt /app/requirements-runpod.txt
-RUN pip3 install --no-cache-dir -r /app/requirements-runpod.txt && \
-    rm -rf /root/.cache/pip
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip3 install -r /app/requirements-runpod.txt
 
 # Copy Hunyuan3D-2 codebase and compile C++/CUDA native rasterizers
 COPY 3d_generative/Hunyuan3D-2-main /app/3d_generative/Hunyuan3D-2-main
 
-RUN pip3 install --no-cache-dir --no-deps -e /app/3d_generative/Hunyuan3D-2-main && \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip3 install --no-deps -e /app/3d_generative/Hunyuan3D-2-main && \
     cd /app/3d_generative/Hunyuan3D-2-main/hy3dgen/texgen/custom_rasterizer && \
     python3 setup.py install && \
     cd /app/3d_generative/Hunyuan3D-2-main/hy3dgen/texgen/differentiable_renderer && \
     python3 setup.py install && \
-    rm -rf /root/.cache/pip
+    rm -rf /usr/local/cuda/targets/x86_64-linux/lib/*_static.a /app/3d_generative/Hunyuan3D-2-main/hy3dgen/texgen/*/build
 
-# Pre-download rembg and Hunyuan3D shape model into Docker image layer (cached layer)
+# Pre-download rembg and Hunyuan3D shape model metadata into Docker image layer
 COPY preload_models.py /app/preload_models.py
-RUN python3 /app/preload_models.py && \
-    rm -rf /root/.cache/pip
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 /app/preload_models.py || true
 
 # Copy application handler and entrypoint (code changes here will NOT bust cache above)
 COPY runpod_handler.py /app/runpod_handler.py
