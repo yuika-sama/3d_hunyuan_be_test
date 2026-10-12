@@ -30,35 +30,6 @@ from .utils.uv_warp_utils import mesh_uv_wrap
 logger = logging.getLogger(__name__)
 
 
-def align_colors_to_reference(src_img_np: np.ndarray, ref_img_np: np.ndarray, ref_mask: np.ndarray = None) -> np.ndarray:
-    """
-    Transfers the color mean and standard deviation from ref_img to src_img
-    in RGB space for masked foreground pixels, aligning the palette perfectly.
-    src_img_np: (H, W, 3) float32 [0..255]
-    ref_img_np: (H, W, 3) float32 [0..255]
-    ref_mask: (H, W) bool indicating foreground
-    """
-    if ref_mask is None or not np.any(ref_mask):
-        ref_mask = np.ones(ref_img_np.shape[:2], dtype=bool)
-
-    ref_fg = ref_img_np[ref_mask]
-    out = src_img_np.copy()
-
-    for c in range(3):
-        ref_mean = float(np.mean(ref_fg[:, c]))
-        ref_std = float(np.std(ref_fg[:, c]))
-        src_mean = float(np.mean(src_img_np[:, :, c]))
-        src_std = float(np.std(src_img_np[:, :, c]))
-
-        if src_std > 1e-4 and ref_std > 1e-4:
-            scaled = (src_img_np[:, :, c] - src_mean) * (ref_std / src_std) + ref_mean
-            out[:, :, c] = np.clip(scaled, 0.0, 255.0)
-        else:
-            out[:, :, c] = np.clip(src_img_np[:, :, c] - src_mean + ref_mean, 0.0, 255.0)
-
-    return out
-
-
 class Hunyuan3DTexGenConfig:
 
     def __init__(self, light_remover_ckpt_path, multiview_ckpt_path, subfolder_name,
@@ -69,7 +40,7 @@ class Hunyuan3DTexGenConfig:
 
         self.candidate_camera_azims = [0, 90, 180, 270, 0, 180]
         self.candidate_camera_elevs = [0, 0, 0, 0, 90, -90]
-        self.candidate_view_weights = [1, 0.1, 0.5, 0.1, 0.05, 0.05]
+        self.candidate_view_weights = [1.0, 0.5, 0.8, 0.5, 0.2, 0.2]
 
         self.render_size = render_size
         self.texture_size = texture_size
@@ -242,18 +213,10 @@ class Hunyuan3DPaintPipeline:
         return texture
 
     def recenter_image(self, image, border_ratio=0.2):
-        if image.mode == 'L':
-            image = image.convert('RGB')
         if image.mode == 'RGB':
-            w, h = image.size
-            if w == h:
-                return image
-            square_size = max(w, h)
-            new_image = Image.new('RGB', (square_size, square_size), (255, 255, 255))
-            paste_x = (square_size - w) // 2
-            paste_y = (square_size - h) // 2
-            new_image.paste(image, (paste_x, paste_y))
-            return new_image
+            return image
+        elif image.mode == 'L':
+            return image.convert('RGB')
 
         alpha_channel = np.array(image)[:, :, 3]
         non_zero_indices = np.argwhere(alpha_channel > 10)
@@ -312,9 +275,6 @@ class Hunyuan3DPaintPipeline:
             
         images_prompt = [self.recenter_image(image_prompt) for image_prompt in images_prompt]
 
-        # Preserve the pristine un-delighted reference image for high-fidelity front texture and color palette
-        primary_ref = images_prompt[0].convert('RGBA')
-
         # Ensure multiview_model is offloaded to CPU while delight_model runs to prevent simultaneous VRAM spikes
         if 'multiview_model' in self.models and self.models['multiview_model'] is not None:
             if hasattr(self.models['multiview_model'], 'to'):
@@ -372,36 +332,6 @@ class Hunyuan3DPaintPipeline:
         render_res = (self.config.render_size, self.config.render_size)
         for i in range(len(multiviews)):
             multiviews[i] = multiviews[i].resize(render_res, Image.Resampling.LANCZOS)
-
-        # High-Fidelity Color Calibration & Front View Likeness Enhancement
-        try:
-            ref_resized = primary_ref.resize(render_res, Image.Resampling.LANCZOS)
-            ref_arr = np.array(ref_resized).astype(np.float32)
-            ref_rgb = ref_arr[:, :, :3]
-            ref_alpha = ref_arr[:, :, 3] / 255.0
-            ref_mask = ref_alpha > 0.05
-
-            # 1. Calibrate colors across all views (sides, back, top, bottom) to match reference image palette
-            for i in range(len(multiviews)):
-                mv_arr = np.array(multiviews[i]).astype(np.float32)
-                calibrated = align_colors_to_reference(mv_arr, ref_rgb, ref_mask)
-                # Blend 85% calibrated + 15% original shading to retain 3D shading while anchoring true colors
-                mv_blended = 0.85 * calibrated + 0.15 * mv_arr
-                multiviews[i] = Image.fromarray(np.clip(mv_blended, 0.0, 255.0).astype(np.uint8))
-
-            # 2. For View 0 (Front view at azim=0, elev=0):
-            # Directly use the high-resolution input image with feathered alpha blending
-            # so the 3D model inherits the exact face/pattern/texture of the user's image
-            from PIL import ImageFilter
-            alpha_img = Image.fromarray((ref_alpha * 255.0).astype(np.uint8), mode='L')
-            alpha_feathered = np.array(alpha_img.filter(ImageFilter.GaussianBlur(radius=2))).astype(np.float32) / 255.0
-            alpha_3d = np.expand_dims(alpha_feathered, axis=-1)
-
-            front_arr = np.array(multiviews[0]).astype(np.float32)
-            blended_front = ref_rgb * alpha_3d + front_arr * (1.0 - alpha_3d)
-            multiviews[0] = Image.fromarray(np.clip(blended_front, 0.0, 255.0).astype(np.uint8))
-        except Exception as e:
-            logger.warning(f"Color calibration and front likeness enhancement encountered error ({e}); using raw multiviews.")
 
         # Stage 3: Texture baking and inpainting
         texture, mask = self.bake_from_multiview(multiviews,

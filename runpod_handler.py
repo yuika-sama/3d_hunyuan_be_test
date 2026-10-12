@@ -627,7 +627,21 @@ def handle_generate3d(
                     and getattr(getattr(textured_mesh, "visual", None), "kind", None) == "texture"
                 ):
                     mesh = textured_mesh
-                    logger.info("Texture generation completed successfully. Textured mesh ready for GLB export.")
+                    visual = getattr(mesh, "visual", None)
+                    material = getattr(visual, "material", None)
+                    tex_img = getattr(material, "image", None) or getattr(material, "baseColorTexture", None)
+                    tex_dims = tex_img.size if tex_img is not None else (tex_res, tex_res)
+                    logger.info(
+                        "Texture generation completed successfully. Texture size: %s. Textured mesh ready for GLB export.",
+                        tex_dims,
+                    )
+                    yield {
+                        "type": "progress",
+                        "stage": "texture_completed",
+                        "texture_resolution": list(tex_dims),
+                        "elapsed_ms": int((time.time() - start_time) * 1000),
+                        "vram": get_vram_info(),
+                    }
                 else:
                     raise RuntimeError("Texture pipeline returned a mesh without texture data.")
             except Exception as e:
@@ -751,7 +765,16 @@ def handle_pipeline(
         "data": {"moderation": moderation, "texture_moderation": texture_moderation},
     }
 
-    generate_input = {**job_input, "texture": True, "texture_resolution": 1024}
+    tex_res_req = (
+        job_input.get("texture_resolution")
+        or job_input.get("texture_size")
+        or DEFAULT_TEXTURE_RESOLUTION
+    )
+    generate_input = {
+        **job_input,
+        "texture": True,
+        "texture_resolution": int(tex_res_req),
+    }
     for event in handle_generate3d(generate_input, start_time):
         if event.get("type") == "progress":
             event = {**event, "stage": f"generate3d.{event['stage']}"}
