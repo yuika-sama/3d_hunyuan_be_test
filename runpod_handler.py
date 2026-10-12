@@ -85,12 +85,15 @@ NSFW_MODEL_NAME = os.getenv("NSFW_MODEL_NAME", "strangerguardhf/nsfw_image_detec
 HUNYUAN_SHAPE_MODEL = os.getenv("HUNYUAN_SHAPE_MODEL", "tencent/Hunyuan3D-2.1")
 HUNYUAN_SHAPE_SUBFOLDER = os.getenv("HUNYUAN_SHAPE_SUBFOLDER", "hunyuan3d-dit-v2-1")
 HUNYUAN_TEX_MODEL = os.getenv("HUNYUAN_TEX_MODEL", "tencent/Hunyuan3D-2")
+HUNYUAN_TEX_SUBFOLDER = os.getenv("HUNYUAN_TEX_SUBFOLDER", "hunyuan3d-paint-v2-0")
 HUNYUAN_SHAPE_USE_SAFETENSORS = not HUNYUAN_SHAPE_MODEL.endswith("Hunyuan3D-2.1")
 HUNYUAN_USE_FLASHVDM = "turbo" in HUNYUAN_SHAPE_SUBFOLDER.lower()
 
-DEFAULT_OCTREE_RESOLUTION = 384
+DEFAULT_OCTREE_RESOLUTION = int(os.getenv("DEFAULT_OCTREE_RESOLUTION", "384"))
 DEFAULT_INFERENCE_STEPS = 5 if HUNYUAN_USE_FLASHVDM else 50
 DEFAULT_FACE_COUNT = int(os.getenv("DEFAULT_FACE_COUNT", "40000"))
+DEFAULT_TEXTURE_RESOLUTION = int(os.getenv("DEFAULT_TEXTURE_RESOLUTION", "2048"))
+DEFAULT_BAKE_EXP = int(os.getenv("DEFAULT_BAKE_EXP", "4"))
 
 # Chunk size for GLB streaming: 512 KiB raw data per chunk
 CHUNK_SIZE_BYTES = 512 * 1024
@@ -278,23 +281,32 @@ class ModelManager:
                         except Exception as e:
                             logger.warning(f"Failed to move {model_name} to {device}: {e}")
 
-    def load_tex_pipeline(self):
+    def load_tex_pipeline(self, subfolder: Optional[str] = None):
         """Lazy load texture pipeline with CPU offloading."""
         if self.hunyuan_worker is None:
             self.hunyuan_worker = {}
 
-        if "tex_pipeline" not in self.hunyuan_worker or self.hunyuan_worker["tex_pipeline"] is None:
-            logger.info(f"Loading texture model {HUNYUAN_TEX_MODEL}...")
-            from hy3dgen.texgen import Hunyuan3DPaintPipeline
+        target_subfolder = subfolder or HUNYUAN_TEX_SUBFOLDER
+        current_tex_pipe = self.hunyuan_worker.get("tex_pipeline")
+        current_subfolder = getattr(current_tex_pipe, "_loaded_subfolder", None)
 
-            try:
-                tex_pipeline = Hunyuan3DPaintPipeline.from_pretrained(HUNYUAN_TEX_MODEL)
-                self.offload_tex_pipeline(tex_pipeline)
-                self.hunyuan_worker["tex_pipeline"] = tex_pipeline
-                logger.info("Texture pipeline loaded and offloaded to CPU.")
-            except Exception as e:
-                logger.error(f"Failed to load texture model: {e}\n{traceback.format_exc()}")
-                self.hunyuan_worker["tex_pipeline"] = None
+        if current_tex_pipe is not None and current_subfolder == target_subfolder:
+            return current_tex_pipe
+
+        logger.info(f"Loading texture model {HUNYUAN_TEX_MODEL} (subfolder: {target_subfolder})...")
+        from hy3dgen.texgen import Hunyuan3DPaintPipeline
+
+        try:
+            tex_pipeline = Hunyuan3DPaintPipeline.from_pretrained(
+                HUNYUAN_TEX_MODEL, subfolder=target_subfolder
+            )
+            tex_pipeline._loaded_subfolder = target_subfolder
+            self.offload_tex_pipeline(tex_pipeline)
+            self.hunyuan_worker["tex_pipeline"] = tex_pipeline
+            logger.info("Texture pipeline loaded and offloaded to CPU.")
+        except Exception as e:
+            logger.error(f"Failed to load texture model: {e}\n{traceback.format_exc()}")
+            self.hunyuan_worker["tex_pipeline"] = None
 
         return self.hunyuan_worker.get("tex_pipeline")
 
@@ -397,16 +409,37 @@ def handle_generate3d(
     guidance = float(job_input.get("guidance_scale", 5.0))
     face_count = int(job_input.get("face_count", DEFAULT_FACE_COUNT))
     enable_texture = bool(job_input.get("texture", True))
-    texture_img = None
+
+    # Texture configuration parameters
+    tex_res = int(
+        job_input.get("texture_resolution")
+        or job_input.get("texture_size")
+        or DEFAULT_TEXTURE_RESOLUTION
+    )
+    tex_subfolder = (
+        job_input.get("texture_subfolder")
+        or job_input.get("subfolder")
+        or HUNYUAN_TEX_SUBFOLDER
+    )
+    bake_exp = int(job_input.get("bake_exp", DEFAULT_BAKE_EXP))
+
+    texture_imgs = []
     if enable_texture:
-        texture_str = job_input.get("texture_image_base64") or job_input.get("texture_image")
-        if texture_str:
-            texture_img, _ = decode_base64_image(texture_str)
+        mv_inputs = job_input.get("texture_images_base64") or job_input.get("texture_images")
+        if mv_inputs and isinstance(mv_inputs, list):
+            for t_item in mv_inputs:
+                t_dec, _ = decode_base64_image(t_item)
+                texture_imgs.append(t_dec)
         else:
-            texture_img = pil_img
+            single_tex = job_input.get("texture_image_base64") or job_input.get("texture_image")
+            if single_tex:
+                t_dec, _ = decode_base64_image(single_tex)
+                texture_imgs.append(t_dec)
+            else:
+                texture_imgs.append(pil_img)
 
     logger.info(
-        "Shape config: model=%s subfolder=%s decoder=%s seed=%d octree=%d steps=%d guidance=%s faces=%d",
+        "Shape config: model=%s subfolder=%s decoder=%s seed=%d octree=%d steps=%d guidance=%s faces=%d tex_res=%d bake_exp=%d",
         HUNYUAN_SHAPE_MODEL,
         HUNYUAN_SHAPE_SUBFOLDER,
         "flashvdm" if HUNYUAN_USE_FLASHVDM else "standard",
@@ -415,6 +448,8 @@ def handle_generate3d(
         steps,
         guidance,
         face_count,
+        tex_res,
+        bake_exp,
     )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -439,11 +474,12 @@ def handle_generate3d(
     }
     t_prep_start = time.time()
     image_no_bg = prepare_shape_image(pil_img, rembg)
-    texture_image_no_bg = (
-        image_no_bg
-        if texture_img is pil_img
-        else (prepare_shape_image(texture_img, rembg) if texture_img else None)
-    )
+    texture_images_no_bg = []
+    for t_img in texture_imgs:
+        if t_img is pil_img:
+            texture_images_no_bg.append(image_no_bg)
+        else:
+            texture_images_no_bg.append(prepare_shape_image(t_img, rembg))
     prep_ms = int((time.time() - t_prep_start) * 1000)
 
     # 2. Shape generation
@@ -552,7 +588,7 @@ def handle_generate3d(
                 "elapsed_ms": int((time.time() - start_time) * 1000),
                 "vram": get_vram_info(),
             }
-            tex_pipeline = model_manager.load_tex_pipeline()
+            tex_pipeline = model_manager.load_tex_pipeline(subfolder=tex_subfolder)
 
         if tex_pipeline is not None:
             t_tex_start = time.time()
@@ -564,7 +600,14 @@ def handle_generate3d(
                     "elapsed_ms": int((time.time() - start_time) * 1000),
                     "vram": get_vram_info(),
                 }
-                textured_mesh = tex_pipeline(mesh, texture_image_no_bg)
+                tex_input = texture_images_no_bg[0] if len(texture_images_no_bg) == 1 else texture_images_no_bg
+                textured_mesh = tex_pipeline(
+                    mesh,
+                    tex_input,
+                    render_size=tex_res,
+                    texture_size=tex_res,
+                    bake_exp=bake_exp,
+                )
                 if (
                     textured_mesh is not None
                     and getattr(getattr(textured_mesh, "visual", None), "kind", None) == "texture"

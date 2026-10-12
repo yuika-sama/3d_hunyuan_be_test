@@ -94,7 +94,9 @@ async def generate3d(
         "image": base64_str,
         "texture_image": texture_base64_str,
         "texture": True,
-        "texture_resolution": 1024,
+        "texture_resolution": 2048,
+        "texture_subfolder": "hunyuan3d-paint-v2-0",
+        "bake_exp": 4,
     }
 
     async with httpx.AsyncClient(timeout=1200.0) as client: # Tăng timeout lên 1200s (20 phút)
@@ -199,7 +201,9 @@ async def process_all_pipeline(
                     "image": base64.b64encode(image_bytes).decode("utf-8"),
                     "texture_image": base64.b64encode(texture_image_bytes).decode("utf-8"),
                     "texture": True,
-                    "texture_resolution": 1024,
+                    "texture_resolution": 2048,
+                    "texture_subfolder": "hunyuan3d-paint-v2-0",
+                    "bake_exp": 4,
                 },
             )
             model_response.raise_for_status()

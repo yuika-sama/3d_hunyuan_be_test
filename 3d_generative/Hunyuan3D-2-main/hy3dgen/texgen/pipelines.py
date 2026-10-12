@@ -30,9 +30,39 @@ from .utils.uv_warp_utils import mesh_uv_wrap
 logger = logging.getLogger(__name__)
 
 
+def align_colors_to_reference(src_img_np: np.ndarray, ref_img_np: np.ndarray, ref_mask: np.ndarray = None) -> np.ndarray:
+    """
+    Transfers the color mean and standard deviation from ref_img to src_img
+    in RGB space for masked foreground pixels, aligning the palette perfectly.
+    src_img_np: (H, W, 3) float32 [0..255]
+    ref_img_np: (H, W, 3) float32 [0..255]
+    ref_mask: (H, W) bool indicating foreground
+    """
+    if ref_mask is None or not np.any(ref_mask):
+        ref_mask = np.ones(ref_img_np.shape[:2], dtype=bool)
+
+    ref_fg = ref_img_np[ref_mask]
+    out = src_img_np.copy()
+
+    for c in range(3):
+        ref_mean = float(np.mean(ref_fg[:, c]))
+        ref_std = float(np.std(ref_fg[:, c]))
+        src_mean = float(np.mean(src_img_np[:, :, c]))
+        src_std = float(np.std(src_img_np[:, :, c]))
+
+        if src_std > 1e-4 and ref_std > 1e-4:
+            scaled = (src_img_np[:, :, c] - src_mean) * (ref_std / src_std) + ref_mean
+            out[:, :, c] = np.clip(scaled, 0.0, 255.0)
+        else:
+            out[:, :, c] = np.clip(src_img_np[:, :, c] - src_mean + ref_mean, 0.0, 255.0)
+
+    return out
+
+
 class Hunyuan3DTexGenConfig:
 
-    def __init__(self, light_remover_ckpt_path, multiview_ckpt_path, subfolder_name):
+    def __init__(self, light_remover_ckpt_path, multiview_ckpt_path, subfolder_name,
+                 render_size=2048, texture_size=2048, bake_exp=4, merge_method='fast'):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.light_remover_ckpt_path = light_remover_ckpt_path
         self.multiview_ckpt_path = multiview_ckpt_path
@@ -41,10 +71,10 @@ class Hunyuan3DTexGenConfig:
         self.candidate_camera_elevs = [0, 0, 0, 0, 90, -90]
         self.candidate_view_weights = [1, 0.1, 0.5, 0.1, 0.05, 0.05]
 
-        self.render_size = 2048
-        self.texture_size = 2048
-        self.bake_exp = 4
-        self.merge_method = 'fast'
+        self.render_size = render_size
+        self.texture_size = texture_size
+        self.bake_exp = bake_exp
+        self.merge_method = merge_method
 
         self.pipe_dict = {'hunyuan3d-paint-v2-0': 'hunyuanpaint', 'hunyuan3d-paint-v2-0-turbo': 'hunyuanpaint-turbo'}
         self.pipe_name = self.pipe_dict[subfolder_name]
@@ -52,7 +82,9 @@ class Hunyuan3DTexGenConfig:
 
 class Hunyuan3DPaintPipeline:
     @classmethod
-    def from_pretrained(cls, model_path, subfolder='hunyuan3d-paint-v2-0-turbo'):
+    def from_pretrained(cls, model_path, subfolder=None, **config_kwargs):
+        if subfolder is None:
+            subfolder = os.environ.get('HUNYUAN_TEX_SUBFOLDER', 'hunyuan3d-paint-v2-0')
         required_weights = (
             os.path.join(subfolder, 'unet', 'diffusion_pytorch_model.bin'),
             os.path.join(subfolder, 'vae', 'diffusion_pytorch_model.bin'),
@@ -113,19 +145,19 @@ class Hunyuan3DPaintPipeline:
                             raise FileNotFoundError("Downloaded texture model is incomplete")
                     delight_model_path = os.path.join(resolved_path, 'hunyuan3d-delight-v2-0')
                     multiview_model_path = os.path.join(resolved_path, subfolder)
-                    return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder))
+                    return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder, **config_kwargs))
                 except Exception as e:
                     import traceback
                     traceback.print_exc()
                     raise RuntimeError(f"Something wrong while loading {original_model_path}: {e}")
             else:
-                return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder))
+                return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder, **config_kwargs))
         else:
             if not has_required_weights(model_path):
                 raise FileNotFoundError(f"Texture model is incomplete: {model_path}")
             delight_model_path = os.path.join(model_path, 'hunyuan3d-delight-v2-0')
             multiview_model_path = os.path.join(model_path, subfolder)
-            return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder))
+            return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder, **config_kwargs))
             
     def __init__(self, config):
         self.config = config
@@ -252,7 +284,18 @@ class Hunyuan3DPaintPipeline:
         return new_image
 
     @torch.no_grad()
-    def __call__(self, mesh, image):
+    def __call__(self, mesh, image, render_size=None, texture_size=None, bake_exp=None):
+        if render_size is not None:
+            self.config.render_size = render_size
+            if hasattr(self, 'render') and self.render is not None and hasattr(self.render, 'set_default_render_resolution'):
+                self.render.set_default_render_resolution(render_size)
+        if texture_size is not None:
+            self.config.texture_size = texture_size
+            if hasattr(self, 'render') and self.render is not None and hasattr(self.render, 'set_default_texture_resolution'):
+                self.render.set_default_texture_resolution(texture_size)
+        if bake_exp is not None:
+            self.config.bake_exp = bake_exp
+
         device = getattr(self, 'device', 'cuda' if torch.cuda.is_available() else 'cpu')
 
         if not isinstance(image, List):
@@ -267,6 +310,9 @@ class Hunyuan3DPaintPipeline:
             images_prompt.append(image_prompt)
             
         images_prompt = [self.recenter_image(image_prompt) for image_prompt in images_prompt]
+
+        # Preserve the pristine un-delighted reference image for high-fidelity front texture and color palette
+        primary_ref = images_prompt[0].convert('RGBA')
 
         # Ensure multiview_model is offloaded to CPU while delight_model runs to prevent simultaneous VRAM spikes
         if 'multiview_model' in self.models and self.models['multiview_model'] is not None:
@@ -321,10 +367,40 @@ class Hunyuan3DPaintPipeline:
         else:
             raise RuntimeError("Multiview diffusion model is not initialized.")
 
+        # Resize all multiviews to target render resolution with high quality Lanczos filter
+        render_res = (self.config.render_size, self.config.render_size)
         for i in range(len(multiviews)):
-            # multiviews[i] = self.models['super_model'](multiviews[i])
-            multiviews[i] = multiviews[i].resize(
-                (self.config.render_size, self.config.render_size))
+            multiviews[i] = multiviews[i].resize(render_res, Image.Resampling.LANCZOS)
+
+        # High-Fidelity Color Calibration & Front View Likeness Enhancement
+        try:
+            ref_resized = primary_ref.resize(render_res, Image.Resampling.LANCZOS)
+            ref_arr = np.array(ref_resized).astype(np.float32)
+            ref_rgb = ref_arr[:, :, :3]
+            ref_alpha = ref_arr[:, :, 3] / 255.0
+            ref_mask = ref_alpha > 0.05
+
+            # 1. Calibrate colors across all views (sides, back, top, bottom) to match reference image palette
+            for i in range(len(multiviews)):
+                mv_arr = np.array(multiviews[i]).astype(np.float32)
+                calibrated = align_colors_to_reference(mv_arr, ref_rgb, ref_mask)
+                # Blend 85% calibrated + 15% original shading to retain 3D shading while anchoring true colors
+                mv_blended = 0.85 * calibrated + 0.15 * mv_arr
+                multiviews[i] = Image.fromarray(np.clip(mv_blended, 0.0, 255.0).astype(np.uint8))
+
+            # 2. For View 0 (Front view at azim=0, elev=0):
+            # Directly use the high-resolution input image with feathered alpha blending
+            # so the 3D model inherits the exact face/pattern/texture of the user's image
+            from PIL import ImageFilter
+            alpha_img = Image.fromarray((ref_alpha * 255.0).astype(np.uint8), mode='L')
+            alpha_feathered = np.array(alpha_img.filter(ImageFilter.GaussianBlur(radius=2))).astype(np.float32) / 255.0
+            alpha_3d = np.expand_dims(alpha_feathered, axis=-1)
+
+            front_arr = np.array(multiviews[0]).astype(np.float32)
+            blended_front = ref_rgb * alpha_3d + front_arr * (1.0 - alpha_3d)
+            multiviews[0] = Image.fromarray(np.clip(blended_front, 0.0, 255.0).astype(np.uint8))
+        except Exception as e:
+            logger.warning(f"Color calibration and front likeness enhancement encountered error ({e}); using raw multiviews.")
 
         # Stage 3: Texture baking and inpainting
         texture, mask = self.bake_from_multiview(multiviews,
