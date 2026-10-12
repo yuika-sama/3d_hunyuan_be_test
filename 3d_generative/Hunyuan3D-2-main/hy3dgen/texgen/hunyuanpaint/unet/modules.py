@@ -95,6 +95,8 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
                         param.zero_()
 
     def __getattr__(self, name: str):
+        if name == "is_turbo":
+            return False
         try:
             return super().__getattr__(name)
         except AttributeError:
@@ -121,7 +123,7 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
         mode = cross_attention_kwargs.pop('mode', None)
         mva_scale = cross_attention_kwargs.pop('mva_scale', 1.0)
         ref_scale = cross_attention_kwargs.pop('ref_scale', 1.0)
-        if self.is_turbo:
+        if getattr(self, "is_turbo", False):
             position_attn_mask = cross_attention_kwargs.pop("position_attn_mask", None)
             mva_scale = 1.0
             ref_scale = 1.0
@@ -203,7 +205,7 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
         if num_in_batch > 1 and self.use_ma:
             multivew_hidden_states = rearrange(norm_hidden_states, '(b n) l c -> b (n l) c', n=num_in_batch)
 
-            if self.is_turbo:
+            if getattr(self, "is_turbo", False):
                 position_mask = None
                 if position_attn_mask is not None:
                     if multivew_hidden_states.shape[1] in position_attn_mask:
@@ -516,7 +518,7 @@ class UNet2p5DConditionModel(torch.nn.Module):
         mva_scale = cached_condition.get('mva_scale', 1.0)
         ref_scale = cached_condition.get('ref_scale', 1.0)
 
-        if self.is_turbo:
+        if getattr(self, "is_turbo", False):
             position_attn_mask = cached_condition.get('position_attn_mask', None)
             cross_attention_kwargs_ = {
                 'mode': 'r', 'num_in_batch': N_gen,

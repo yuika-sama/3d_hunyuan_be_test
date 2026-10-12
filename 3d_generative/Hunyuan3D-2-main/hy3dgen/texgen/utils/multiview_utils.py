@@ -39,9 +39,12 @@ class Multiview_Diffusion_Net():
             torch_dtype=torch.float16,
         )
         # Diffusers caches the Hub code, so bind every affected instance to the fixed local forwards.
+        is_turbo_val = getattr(pipeline, 'is_turbo', False) or (config.pipe_name in ['hunyuanpaint-turbo'])
+        pipeline.unet.is_turbo = is_turbo_val
         pipeline.unet.forward = UNet2p5DConditionModel.forward.__get__(pipeline.unet, type(pipeline.unet))
         for module in pipeline.unet.modules():
             if module.__class__.__name__ == Basic2p5DTransformerBlock.__name__:
+                module.is_turbo = is_turbo_val
                 module.forward = Basic2p5DTransformerBlock.forward.__get__(module, type(module))
 
         if config.pipe_name in ['hunyuanpaint']:

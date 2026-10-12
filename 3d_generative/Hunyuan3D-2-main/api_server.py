@@ -141,11 +141,11 @@ logger = build_logger("controller", f"{SAVE_DIR}/controller.log")
 
 def load_image_from_base64(image):
     # Đọc ảnh từ base64
+    if isinstance(image, str) and "," in image and ";base64" in image:
+        image = image.split(",", 1)[1]
     img = Image.open(BytesIO(base64.b64decode(image)))
-    
-    # Chỉ đơn giản là convert sang RGB để tương thích model
-    # Không tự ý chèn nền trắng nữa để tránh làm hỏng ảnh gốc của bạn
-    return img.convert("RGB")
+    has_alpha = "A" in img.getbands() or "transparency" in img.info
+    return img.convert("RGBA" if has_alpha else "RGB")
 
 
 class ModelWorker:
@@ -153,6 +153,7 @@ class ModelWorker:
                  model_path='tencent/Hunyuan3D-2mini',
                  tex_model_path='tencent/Hunyuan3D-2',
                  subfolder='hunyuan3d-dit-v2-mini-turbo',
+                 tex_subfolder=None,
                  device='cuda',
                  enable_tex=False):
         self.model_path = model_path
@@ -170,7 +171,6 @@ class ModelWorker:
             use_safetensors=True,
             device="cpu", 
         )
-        # Dòng này giờ thừa nhưng cứ để đó cũng không sao
         self.pipeline.to("cpu") 
         
         self.pipeline.enable_flashvdm(mc_algo='mc')
@@ -179,7 +179,8 @@ class ModelWorker:
         self.pipeline_tex = None
         if enable_tex:
             try:
-                self.pipeline_tex = Hunyuan3DPaintPipeline.from_pretrained(tex_model_path)
+                sub = tex_subfolder or os.getenv('HUNYUAN_TEX_SUBFOLDER', 'hunyuan3d-paint-v2-0')
+                self.pipeline_tex = Hunyuan3DPaintPipeline.from_pretrained(tex_model_path, subfolder=sub)
                 self.pipeline_tex.to("cpu")
                 logger.info("Texture model loaded and offloaded to CPU.")
             except Exception as e:
@@ -276,7 +277,13 @@ class ModelWorker:
                     print(">>> [Texture] Moving Paint pipeline to GPU...")
                     self.pipeline_tex.to(self.device)
                     print(">>> [Texture] Painting...")
-                    textured_mesh = self.pipeline_tex(mesh, tex_input_img)
+                    textured_mesh = self.pipeline_tex(
+                        mesh,
+                        tex_input_img,
+                        render_size=params.get('texture_resolution', params.get('texture_size', None)),
+                        texture_size=params.get('texture_resolution', params.get('texture_size', None)),
+                        bake_exp=params.get('bake_exp', None),
+                    )
                     if textured_mesh is not None:
                         mesh = textured_mesh
                     print(">>> [Texture] Offloading Paint pipeline to CPU...")
@@ -375,6 +382,8 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8081)
     parser.add_argument("--model_path", type=str, default='tencent/Hunyuan3D-2mini')
     parser.add_argument("--tex_model_path", type=str, default='tencent/Hunyuan3D-2')
+    parser.add_argument("--subfolder", type=str, default='hunyuan3d-dit-v2-mini-turbo')
+    parser.add_argument("--tex_subfolder", type=str, default=os.getenv('HUNYUAN_TEX_SUBFOLDER', 'hunyuan3d-paint-v2-0'))
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--limit-model-concurrency", type=int, default=5)
     parser.add_argument('--enable_tex', action='store_true')
@@ -383,6 +392,12 @@ if __name__ == "__main__":
 
     model_semaphore = asyncio.Semaphore(args.limit_model_concurrency)
 
-    worker = ModelWorker(model_path=args.model_path, device=args.device, enable_tex=args.enable_tex,
-                         tex_model_path=args.tex_model_path)
+    worker = ModelWorker(
+        model_path=args.model_path,
+        subfolder=args.subfolder,
+        device=args.device,
+        enable_tex=args.enable_tex,
+        tex_model_path=args.tex_model_path,
+        tex_subfolder=args.tex_subfolder,
+    )
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
