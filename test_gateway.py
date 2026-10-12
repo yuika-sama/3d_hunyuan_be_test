@@ -120,6 +120,42 @@ class TestUnifiedPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["image"], "c2hhcGU=")
         self.assertEqual(payload["texture_image"], "dGV4dHVyZQ==")
 
+    async def test_process_all_single_image_uses_same_image_for_shape_and_texture(self):
+        client = FakeClient(
+            {
+                gateway.NSFW_URL: FakeResponse({"ok": True, "is_nsfw": False}),
+                gateway.THREED_URL: FakeResponse(content=b"glb-data"),
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as output_dir, patch.object(
+            gateway.httpx, "AsyncClient", return_value=client
+        ), patch.object(gateway, "OUTPUT_DIR", Path(output_dir)):
+            result = await gateway.process_all_pipeline(upload(b"single-image"))
+            model_path = Path(output_dir) / f"{result['task_id']}.glb"
+            self.assertEqual(model_path.read_bytes(), b"glb-data")
+
+        # Only one NSFW check is done when single image is provided
+        self.assertEqual(
+            [call[0] for call in client.calls],
+            [gateway.NSFW_URL, gateway.THREED_URL],
+        )
+        self.assertEqual(result["results"]["model_3d"]["status"], "success")
+        model_payload = client.calls[-1][1]["json"]
+        self.assertEqual(model_payload["image"], "c2luZ2xlLWltYWdl")
+        self.assertEqual(model_payload["texture_image"], "c2luZ2xlLWltYWdl")
+
+    async def test_generate3d_single_image_uses_same_image_for_texture(self):
+        client = FakeClient({gateway.THREED_URL: FakeResponse(content=b"glb-data")})
+
+        with patch.object(gateway.httpx, "AsyncClient", return_value=client):
+            response = await gateway.generate3d(upload(b"single-image"))
+
+        self.assertEqual(response.body, b"glb-data")
+        payload = client.calls[0][1]["json"]
+        self.assertEqual(payload["image"], "c2luZ2xlLWltYWdl")
+        self.assertEqual(payload["texture_image"], "c2luZ2xlLWltYWdl")
+
 
 if __name__ == "__main__":
     unittest.main()

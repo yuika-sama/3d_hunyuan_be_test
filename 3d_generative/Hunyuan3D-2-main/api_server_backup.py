@@ -222,7 +222,7 @@ class ModelWorker:
         if params.get('texture', False):
             mesh = FloaterRemover()(mesh)
             mesh = DegenerateFaceRemover()(mesh)
-            mesh = FaceReducer()(mesh, max_facenum=params.get('face_count', 40000))
+            mesh = FaceReducer()(mesh, max_facenum=params.get('face_count', 50000))
             mesh = self.pipeline_tex(mesh, texture_image)
 
         type = params.get('type', 'glb')

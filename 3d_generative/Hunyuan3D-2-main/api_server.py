@@ -268,7 +268,7 @@ class ModelWorker:
             print(">>> [Texture] Starting texture process...")
             mesh = FloaterRemover()(mesh)
             mesh = DegenerateFaceRemover()(mesh)
-            mesh = FaceReducer()(mesh, max_facenum=params.get('face_count', 40000))
+            mesh = FaceReducer()(mesh, max_facenum=params.get('face_count', 50000))
 
             tex_input_img = texture_image if texture_image is not None else image
             if self.pipeline_tex is not None:

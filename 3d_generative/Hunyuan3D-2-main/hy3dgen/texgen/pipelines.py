@@ -209,14 +209,23 @@ class Hunyuan3DPaintPipeline:
         return texture
 
     def recenter_image(self, image, border_ratio=0.2):
-        if image.mode == 'RGB':
-            return image
-        elif image.mode == 'L':
+        if image.mode == 'L':
             image = image.convert('RGB')
-            return image
+        if image.mode == 'RGB':
+            w, h = image.size
+            if w == h:
+                return image
+            square_size = max(w, h)
+            new_image = Image.new('RGB', (square_size, square_size), (255, 255, 255))
+            paste_x = (square_size - w) // 2
+            paste_y = (square_size - h) // 2
+            new_image.paste(image, (paste_x, paste_y))
+            return new_image
 
         alpha_channel = np.array(image)[:, :, 3]
-        non_zero_indices = np.argwhere(alpha_channel > 0)
+        non_zero_indices = np.argwhere(alpha_channel > 10)
+        if non_zero_indices.size == 0:
+            non_zero_indices = np.argwhere(alpha_channel > 0)
         if non_zero_indices.size == 0:
             raise ValueError("Image is fully transparent")
 

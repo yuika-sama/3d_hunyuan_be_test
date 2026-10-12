@@ -90,7 +90,7 @@ HUNYUAN_USE_FLASHVDM = "turbo" in HUNYUAN_SHAPE_SUBFOLDER.lower()
 
 DEFAULT_OCTREE_RESOLUTION = 384
 DEFAULT_INFERENCE_STEPS = 5 if HUNYUAN_USE_FLASHVDM else 50
-DEFAULT_FACE_COUNT = 200000
+DEFAULT_FACE_COUNT = int(os.getenv("DEFAULT_FACE_COUNT", "40000"))
 
 # Chunk size for GLB streaming: 512 KiB raw data per chunk
 CHUNK_SIZE_BYTES = 512 * 1024
@@ -167,14 +167,18 @@ def decode_base64_image(raw_str: str) -> Tuple[Image.Image, bytes]:
 
 
 def prepare_shape_image(image: Image.Image, rembg) -> Image.Image:
-    """Keep a supplied cutout intact; infer alpha only for opaque inputs."""
+    """Keep a supplied cutout intact; infer alpha only for opaque inputs; ensure RGBA."""
     if image.mode == "RGBA":
-        alpha_min, alpha_max = image.getchannel("A").getextrema()
+        alpha = image.getchannel("A")
+        alpha_min, alpha_max = alpha.getextrema()
         if alpha_max == 0:
             raise ValueError("Image alpha channel is fully transparent.")
         if alpha_min < 255:
             return image
-    return rembg(image)
+    res = rembg(image)
+    if res.mode != "RGBA":
+        res = res.convert("RGBA")
+    return res
 
 
 def chunk_bytes(data: bytes, chunk_size: int = CHUNK_SIZE_BYTES) -> list:
@@ -376,7 +380,7 @@ def handle_generate3d(
     job_input: Dict[str, Any], start_time: float
 ) -> Generator[Dict[str, Any], None, None]:
     """Execute Hunyuan3D-2 3D mesh + texture generation with stream chunking."""
-    from hy3dgen.shapegen import DegenerateFaceRemover, FaceReducer
+    from hy3dgen.shapegen import DegenerateFaceRemover, FaceReducer, FloaterRemover
 
     yield {
         "type": "progress",
@@ -435,7 +439,11 @@ def handle_generate3d(
     }
     t_prep_start = time.time()
     image_no_bg = prepare_shape_image(pil_img, rembg)
-    texture_image_no_bg = prepare_shape_image(texture_img, rembg) if texture_img else None
+    texture_image_no_bg = (
+        image_no_bg
+        if texture_img is pil_img
+        else (prepare_shape_image(texture_img, rembg) if texture_img else None)
+    )
     prep_ms = int((time.time() - t_prep_start) * 1000)
 
     # 2. Shape generation
@@ -525,6 +533,7 @@ def handle_generate3d(
     }
     t_clean_start = time.time()
     try:
+        mesh = FloaterRemover()(mesh)
         mesh = DegenerateFaceRemover()(mesh)
         mesh = FaceReducer()(mesh, max_facenum=face_count)
     except Exception as e:

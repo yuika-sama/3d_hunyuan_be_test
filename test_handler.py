@@ -322,8 +322,8 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertEqual(shape_args["octree_resolution"], 384)
         self.assertEqual(shape_args["num_inference_steps"], 50)
         self.assertNotIn("mc_algo", shape_args)
-        mock_shapegen.FloaterRemover.assert_not_called()
-        mock_face_reducer.assert_called_once_with(mock_mesh, max_facenum=200000)
+        mock_shapegen.FloaterRemover.assert_called_once()
+        mock_face_reducer.assert_called_once_with(mock_mesh, max_facenum=40000)
 
     @patch.object(runpod_handler.model_manager, "load_hunyuan")
     @patch.object(runpod_handler.model_manager, "move_tex_pipeline")
@@ -380,7 +380,7 @@ class TestRunpodHandler(unittest.TestCase):
         mock_offload.assert_called_once()
         mock_tex_pipe.assert_called_once()
         self.assertEqual(
-            mock_tex_pipe.call_args.args[1].getpixel((0, 0)),
+            mock_tex_pipe.call_args.args[1].getpixel((0, 0))[:3],
             (0, 0, 255),
         )
 
