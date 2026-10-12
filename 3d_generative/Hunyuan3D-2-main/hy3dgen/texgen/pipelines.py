@@ -32,8 +32,7 @@ logger = logging.getLogger(__name__)
 
 class Hunyuan3DTexGenConfig:
 
-    def __init__(self, light_remover_ckpt_path, multiview_ckpt_path, subfolder_name,
-                 render_size=2048, texture_size=2048, bake_exp=4, merge_method='fast'):
+    def __init__(self, light_remover_ckpt_path, multiview_ckpt_path, subfolder_name):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.light_remover_ckpt_path = light_remover_ckpt_path
         self.multiview_ckpt_path = multiview_ckpt_path
@@ -42,10 +41,10 @@ class Hunyuan3DTexGenConfig:
         self.candidate_camera_elevs = [0, 0, 0, 0, 90, -90]
         self.candidate_view_weights = [1, 0.1, 0.5, 0.1, 0.05, 0.05]
 
-        self.render_size = render_size
-        self.texture_size = texture_size
-        self.bake_exp = bake_exp
-        self.merge_method = merge_method
+        self.render_size = 2048
+        self.texture_size = 2048
+        self.bake_exp = 4
+        self.merge_method = 'fast'
 
         self.pipe_dict = {'hunyuan3d-paint-v2-0': 'hunyuanpaint', 'hunyuan3d-paint-v2-0-turbo': 'hunyuanpaint-turbo'}
         self.pipe_name = self.pipe_dict[subfolder_name]
@@ -53,9 +52,7 @@ class Hunyuan3DTexGenConfig:
 
 class Hunyuan3DPaintPipeline:
     @classmethod
-    def from_pretrained(cls, model_path, subfolder=None, **config_kwargs):
-        if subfolder is None:
-            subfolder = os.environ.get('HUNYUAN_TEX_SUBFOLDER', 'hunyuan3d-paint-v2-0')
+    def from_pretrained(cls, model_path, subfolder='hunyuan3d-paint-v2-0-turbo'):
         required_weights = (
             os.path.join(subfolder, 'unet', 'diffusion_pytorch_model.bin'),
             os.path.join(subfolder, 'vae', 'diffusion_pytorch_model.bin'),
@@ -116,19 +113,19 @@ class Hunyuan3DPaintPipeline:
                             raise FileNotFoundError("Downloaded texture model is incomplete")
                     delight_model_path = os.path.join(resolved_path, 'hunyuan3d-delight-v2-0')
                     multiview_model_path = os.path.join(resolved_path, subfolder)
-                    return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder, **config_kwargs))
+                    return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder))
                 except Exception as e:
                     import traceback
                     traceback.print_exc()
                     raise RuntimeError(f"Something wrong while loading {original_model_path}: {e}")
             else:
-                return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder, **config_kwargs))
+                return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder))
         else:
             if not has_required_weights(model_path):
                 raise FileNotFoundError(f"Texture model is incomplete: {model_path}")
             delight_model_path = os.path.join(model_path, 'hunyuan3d-delight-v2-0')
             multiview_model_path = os.path.join(model_path, subfolder)
-            return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder, **config_kwargs))
+            return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder))
             
     def __init__(self, config):
         self.config = config
@@ -255,18 +252,7 @@ class Hunyuan3DPaintPipeline:
         return new_image
 
     @torch.no_grad()
-    def __call__(self, mesh, image, render_size=None, texture_size=None, bake_exp=None):
-        if render_size is not None:
-            self.config.render_size = render_size
-            if hasattr(self, 'render') and self.render is not None and hasattr(self.render, 'set_default_render_resolution'):
-                self.render.set_default_render_resolution(render_size)
-        if texture_size is not None:
-            self.config.texture_size = texture_size
-            if hasattr(self, 'render') and self.render is not None and hasattr(self.render, 'set_default_texture_resolution'):
-                self.render.set_default_texture_resolution(texture_size)
-        if bake_exp is not None:
-            self.config.bake_exp = bake_exp
-
+    def __call__(self, mesh, image):
         device = getattr(self, 'device', 'cuda' if torch.cuda.is_available() else 'cpu')
 
         if not isinstance(image, List):

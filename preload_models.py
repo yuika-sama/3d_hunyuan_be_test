@@ -88,10 +88,7 @@ def preload(full_texture: bool = False):
         print("[PRELOAD] 3/3 Checking / downloading Hunyuan3D texture model...")
         try:
             from hy3dgen.texgen import Hunyuan3DPaintPipeline
-            tex_subfolder = os.getenv("HUNYUAN_TEX_SUBFOLDER", "hunyuan3d-paint-v2-0")
-            tex_pipeline = Hunyuan3DPaintPipeline.from_pretrained(
-                "tencent/Hunyuan3D-2", subfolder=tex_subfolder
-            )
+            tex_pipeline = Hunyuan3DPaintPipeline.from_pretrained("tencent/Hunyuan3D-2")
             tex_pipeline.to("cpu")
             print("[PRELOAD] Hunyuan3D texture model ready.")
         except Exception as e:

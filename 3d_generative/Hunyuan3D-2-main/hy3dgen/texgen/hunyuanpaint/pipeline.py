@@ -59,7 +59,7 @@ def guidance_scale_embedding(w, embedding_dim=512, dtype=torch.float32):
         `torch.FloatTensor`: Embedding vectors with shape `(len(timesteps), embedding_dim)`
     """
     assert len(w.shape) == 1
-    w = w * 1000.0  
+    w = w * 1000.0
 
     half_dim = embedding_dim // 2
     emb = torch.log(torch.tensor(10000.0)) / (half_dim - 1)

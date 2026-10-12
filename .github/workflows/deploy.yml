@@ -31,8 +31,7 @@ jobs:
       - name: Install Test Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install numpy pillow httpx runpod pytest fastapi python-multipart
+          pip install torch numpy pillow httpx runpod pytest fastapi python-multipart
 
       - name: Run Pytest
         run: |
@@ -48,7 +47,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Free 35+ GB of disk space on the GitHub runner
+      # Free 30+ GB of disk space on the GitHub runner
       - name: Free Disk Space on Runner
         run: |
           echo "Disk space before cleanup:"
@@ -56,11 +55,10 @@ jobs:
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
           sudo rm -rf /usr/share/swift
           sudo rm -rf /usr/local/.ghcup
-          sudo rm -rf /usr/local/share/boost
-          sudo docker system prune --all --volumes --force || true
+          sudo docker image prune --all --force || true
           echo "Disk space after cleanup:"
           df -h
 
@@ -91,12 +89,11 @@ jobs:
           file: ./Dockerfile
           platforms: linux/amd64
           push: true
-          provenance: false
           tags: |
             ${{ env.tag_commit }}
             ${{ env.tag_latest }}
           cache-from: type=gha
-          cache-to: type=gha,mode=min
+          cache-to: type=gha,mode=max
 
   deploy-runpod:
     name: Update Runpod & Smoke Test
@@ -155,27 +152,23 @@ jobs:
           fi
 
           if [ -n "$RUNPOD_ENDPOINT_ID" ]; then
-            echo "Waiting for worker to pull new image and initialize..."
+            echo "Waiting 15s for worker warm-up..."
+            sleep 15
+
+            echo "Running smoke test on endpoint: $RUNPOD_ENDPOINT_ID..."
             DUMMY_PNG="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
             SMOKE_PAYLOAD="{\"input\": {\"action\": \"analyze\", \"image_base64\": \"$DUMMY_PNG\"}}"
 
-            TEST_PASSED=false
-            for i in $(seq 1 5); do
-              echo "Smoke test attempt $i/5 (waiting 15s)..."
-              sleep 15
-              TEST_RES=$(curl -s -X POST "https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}/runsync" \
-                -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
-                -H "Content-Type: application/json" \
-                -d "$SMOKE_PAYLOAD" || true)
-              echo "Response: $TEST_RES"
-              if echo "$TEST_RES" | grep -q '"status":\s*"COMPLETED"'; then
-                echo "Smoke test passed successfully on attempt $i!"
-                TEST_PASSED=true
-                break
-              fi
-            done
+            TEST_RES=$(curl -s -X POST "https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}/runsync" \
+              -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
+              -H "Content-Type: application/json" \
+              -d "$SMOKE_PAYLOAD" || true)
 
-            if [ "$TEST_PASSED" != "true" ]; then
-              echo "::warning ::Worker did not complete smoke test within timeout (likely cold start / image download in progress). Please verify in Runpod dashboard."
+            echo "Smoke test response: $TEST_RES"
+
+            if echo "$TEST_RES" | grep -q '"status":\s*"COMPLETED"'; then
+              echo "Smoke test passed successfully!"
+            else
+              echo "::warning ::Smoke test did not return COMPLETED immediately (may still be in cold start/queue). Check Runpod dashboard."
             fi
           fi

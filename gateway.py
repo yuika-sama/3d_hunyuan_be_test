@@ -78,10 +78,6 @@ async def caption(
 async def generate3d(
     image: UploadFile = File(...),
     texture_image: UploadFile | None = None,
-    texture_resolution: int = Form(2048),
-    bake_exp: int = Form(4),
-    face_count: int = Form(45000),
-    octree_resolution: int = Form(384),
 ):
     raw = await image.read()
     if texture_image is not None and hasattr(texture_image, "read"):
@@ -98,10 +94,7 @@ async def generate3d(
         "image": base64_str,
         "texture_image": texture_base64_str,
         "texture": True,
-        "texture_resolution": texture_resolution,
-        "bake_exp": bake_exp,
-        "face_count": face_count,
-        "octree_resolution": octree_resolution,
+        "texture_resolution": 1024,
     }
 
     async with httpx.AsyncClient(timeout=1200.0) as client: # Tăng timeout lên 1200s (20 phút)
@@ -140,8 +133,6 @@ async def custom_describe(image: UploadFile = File(...), prompt: str = Form("Mô
 async def process_all_pipeline(
     image: UploadFile = File(...),
     texture_image: UploadFile | None = None,
-    texture_resolution: int = Form(2048),
-    bake_exp: int = Form(4),
 ):
     """Run safety checks, then textured 3D generation using a single image (or optional texture override)."""
     image_bytes = await image.read()
@@ -208,8 +199,7 @@ async def process_all_pipeline(
                     "image": base64.b64encode(image_bytes).decode("utf-8"),
                     "texture_image": base64.b64encode(texture_image_bytes).decode("utf-8"),
                     "texture": True,
-                    "texture_resolution": texture_resolution,
-                    "bake_exp": bake_exp,
+                    "texture_resolution": 1024,
                 },
             )
             model_response.raise_for_status()
