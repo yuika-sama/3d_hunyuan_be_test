@@ -154,7 +154,7 @@ def to_rgb_image(maybe_rgba: Image.Image):
         return maybe_rgba
     elif maybe_rgba.mode == 'RGBA':
         rgba = maybe_rgba
-        img = numpy.random.randint(127, 128, size=[rgba.size[1], rgba.size[0], 3], dtype=numpy.uint8)
+        img = numpy.full((rgba.size[1], rgba.size[0], 3), 127, dtype=numpy.uint8)
         img = Image.fromarray(img, 'RGB')
         img.paste(rgba, mask=rgba.getchannel('A'))
         return img

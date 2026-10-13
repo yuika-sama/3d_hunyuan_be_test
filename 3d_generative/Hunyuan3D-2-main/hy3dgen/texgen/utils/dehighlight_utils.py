@@ -115,9 +115,14 @@ class Light_Shadow_Remover():
             image_tensor = torch.tensor(np.array(out_image) / 255.0, device=device)
             rgb_src = image_tensor[:, :, :3]
             corrected = self.recorrect_rgb(rgb_src, rgb_target, alpha)
-            final_img = corrected[:, :, :3] * corrected[:, :, 3:] + torch.ones_like(corrected[:, :, :3]) * (1.0 - corrected[:, :, 3:])
-            return Image.fromarray((final_img.cpu().numpy() * 255).astype(np.uint8))
+            if resized_image.mode == 'RGBA':
+                alpha_out = (corrected[:, :, 3:] * 255.0).clamp(0, 255).to(torch.uint8)
+                rgb_out = (corrected[:, :, :3] * 255.0).clamp(0, 255).to(torch.uint8)
+                rgba_out = torch.cat([rgb_out, alpha_out], dim=-1)
+                return Image.fromarray(rgba_out.cpu().numpy(), mode='RGBA')
+            else:
+                return Image.fromarray((corrected[:, :, :3].cpu().numpy() * 255).astype(np.uint8))
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(f"Light_Shadow_Remover failed ({e}), using original image as fallback.")
-            return image.convert('RGB') if image.mode != 'RGB' else image
+            return image if image.mode == 'RGBA' else image.convert('RGBA')

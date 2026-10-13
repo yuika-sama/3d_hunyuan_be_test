@@ -565,6 +565,20 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertIn('tex_pipeline.to("cpu")', preload_source)
         self.assertNotIn('m.pipeline.to("cpu")', preload_source)
 
+    def test_texture_delight_disabled_by_default_and_preserves_colors(self):
+        """Verify delight model is bypassed by default to preserve RGBA and true colors."""
+        root = Path(__file__).parent / "3d_generative/Hunyuan3D-2-main/hy3dgen/texgen"
+        pipelines_source = (root / "pipelines.py").read_text(encoding="utf-8")
+        paint_source = (root / "hunyuanpaint/pipeline.py").read_text(encoding="utf-8")
+        delight_source = (root / "utils/dehighlight_utils.py").read_text(encoding="utf-8")
+        handler_source = (Path(__file__).parent / "runpod_handler.py").read_text(encoding="utf-8")
+
+        self.assertIn("enable_delight=None", pipelines_source)
+        self.assertIn("getattr(self.config, 'enable_delight', False)", pipelines_source)
+        self.assertIn("HUNYUAN_ENABLE_DELIGHT", handler_source)
+        self.assertIn("numpy.full((rgba.size[1], rgba.size[0], 3), 127", paint_source)
+        self.assertIn("mode='RGBA'", delight_source)
+
 
 if __name__ == "__main__":
     unittest.main()

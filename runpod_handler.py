@@ -94,6 +94,7 @@ DEFAULT_INFERENCE_STEPS = 5 if HUNYUAN_USE_FLASHVDM else 50
 DEFAULT_FACE_COUNT = int(os.getenv("DEFAULT_FACE_COUNT", "40000"))
 DEFAULT_TEXTURE_RESOLUTION = int(os.getenv("DEFAULT_TEXTURE_RESOLUTION", "2048"))
 DEFAULT_BAKE_EXP = int(os.getenv("DEFAULT_BAKE_EXP", "4"))
+HUNYUAN_ENABLE_DELIGHT = os.getenv("HUNYUAN_ENABLE_DELIGHT", "0").lower() in ("1", "true")
 
 # Chunk size for GLB streaming: 512 KiB raw data per chunk
 CHUNK_SIZE_BYTES = 512 * 1024
@@ -436,6 +437,7 @@ def handle_generate3d(
         or HUNYUAN_TEX_SUBFOLDER
     )
     bake_exp = int(job_input.get("bake_exp", DEFAULT_BAKE_EXP))
+    enable_delight = bool(job_input.get("enable_delight", HUNYUAN_ENABLE_DELIGHT))
 
     texture_imgs = []
     if enable_texture:
@@ -453,7 +455,7 @@ def handle_generate3d(
                 texture_imgs.append(pil_img)
 
     logger.info(
-        "Shape config: model=%s subfolder=%s decoder=%s seed=%d octree=%d steps=%d guidance=%s faces=%d tex_res=%d bake_exp=%d",
+        "Shape config: model=%s subfolder=%s decoder=%s seed=%d octree=%d steps=%d guidance=%s faces=%d tex_res=%d bake_exp=%d delight=%s",
         HUNYUAN_SHAPE_MODEL,
         HUNYUAN_SHAPE_SUBFOLDER,
         "flashvdm" if HUNYUAN_USE_FLASHVDM else "standard",
@@ -464,6 +466,7 @@ def handle_generate3d(
         face_count,
         tex_res,
         bake_exp,
+        enable_delight,
     )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -621,6 +624,7 @@ def handle_generate3d(
                     render_size=tex_res,
                     texture_size=tex_res,
                     bake_exp=bake_exp,
+                    enable_delight=enable_delight,
                 )
                 if (
                     textured_mesh is not None

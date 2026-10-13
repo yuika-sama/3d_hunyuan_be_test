@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 class Hunyuan3DTexGenConfig:
 
     def __init__(self, light_remover_ckpt_path, multiview_ckpt_path, subfolder_name,
-                 render_size=2048, texture_size=2048, bake_exp=4, merge_method='fast'):
+                 render_size=2048, texture_size=2048, bake_exp=4, merge_method='fast',
+                 enable_delight=None, **kwargs):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.light_remover_ckpt_path = light_remover_ckpt_path
         self.multiview_ckpt_path = multiview_ckpt_path
@@ -46,6 +47,10 @@ class Hunyuan3DTexGenConfig:
         self.texture_size = texture_size
         self.bake_exp = bake_exp
         self.merge_method = merge_method
+
+        if enable_delight is None:
+            enable_delight = os.environ.get("HUNYUAN_ENABLE_DELIGHT", "0").lower() in ("1", "true")
+        self.enable_delight = enable_delight
 
         self.pipe_dict = {'hunyuan3d-paint-v2-0': 'hunyuanpaint', 'hunyuan3d-paint-v2-0-turbo': 'hunyuanpaint-turbo'}
         self.pipe_name = self.pipe_dict[subfolder_name]
@@ -148,10 +153,11 @@ class Hunyuan3DPaintPipeline:
             if hasattr(self.render, 'to'):
                 self.render.to(device)
         for model_name, model_obj in self.models.items():
-            if hasattr(model_obj, 'to'):
-                model_obj.to(device)
-            elif hasattr(model_obj, 'pipeline') and model_obj.pipeline is not None:
-                model_obj.pipeline.to(device)
+            if model_obj is not None:
+                if hasattr(model_obj, 'to'):
+                    model_obj.to(device)
+                elif hasattr(model_obj, 'pipeline') and model_obj.pipeline is not None:
+                    model_obj.pipeline.to(device)
         return self
 
     def load_models(self):
@@ -159,13 +165,18 @@ class Hunyuan3DPaintPipeline:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         # Load model
-        self.models['delight_model'] = Light_Shadow_Remover(self.config)
+        if getattr(self.config, 'enable_delight', False):
+            self.models['delight_model'] = Light_Shadow_Remover(self.config)
+        else:
+            self.models['delight_model'] = None
         self.models['multiview_model'] = Multiview_Diffusion_Net(self.config)
         # self.models['super_model'] = Image_Super_Net(self.config)
 
     def enable_model_cpu_offload(self, gpu_id: Optional[int] = None, device: Union[torch.device, str] = "cuda"):
-        self.models['delight_model'].pipeline.enable_model_cpu_offload(gpu_id=gpu_id, device=device)
-        self.models['multiview_model'].pipeline.enable_model_cpu_offload(gpu_id=gpu_id, device=device)
+        if self.models.get('delight_model') is not None and hasattr(self.models['delight_model'], 'pipeline') and self.models['delight_model'].pipeline is not None:
+            self.models['delight_model'].pipeline.enable_model_cpu_offload(gpu_id=gpu_id, device=device)
+        if self.models.get('multiview_model') is not None and hasattr(self.models['multiview_model'], 'pipeline') and self.models['multiview_model'].pipeline is not None:
+            self.models['multiview_model'].pipeline.enable_model_cpu_offload(gpu_id=gpu_id, device=device)
 
     def render_normal_multiview(self, camera_elevs, camera_azims, use_abs_coor=True):
         normal_maps = []
@@ -248,7 +259,7 @@ class Hunyuan3DPaintPipeline:
         return new_image
 
     @torch.no_grad()
-    def __call__(self, mesh, image, render_size=None, texture_size=None, bake_exp=None):
+    def __call__(self, mesh, image, render_size=None, texture_size=None, bake_exp=None, enable_delight=None):
         if render_size is not None:
             self.config.render_size = render_size
             if hasattr(self, 'render') and self.render is not None and hasattr(self.render, 'set_default_render_resolution'):
@@ -259,6 +270,8 @@ class Hunyuan3DPaintPipeline:
                 self.render.set_default_texture_resolution(texture_size)
         if bake_exp is not None:
             self.config.bake_exp = bake_exp
+        if enable_delight is not None:
+            self.config.enable_delight = enable_delight
 
         device = getattr(self, 'device', 'cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -283,7 +296,7 @@ class Hunyuan3DPaintPipeline:
                 torch.cuda.empty_cache()
 
         # Stage 1: Delight / Shadow removal (Sequential VRAM management)
-        if 'delight_model' in self.models and self.models['delight_model'] is not None:
+        if getattr(self.config, 'enable_delight', False) and self.models.get('delight_model') is not None:
             try:
                 if hasattr(self.models['delight_model'], 'to'):
                     self.models['delight_model'].to(device)
