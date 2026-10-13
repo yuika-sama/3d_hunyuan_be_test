@@ -1,2 +1,0 @@
-pip install ollama
-ollama pull minicpm-v

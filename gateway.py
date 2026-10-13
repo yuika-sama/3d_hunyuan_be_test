@@ -7,9 +7,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 NSFW_URL    = "http://127.0.0.1:5001/analyze"
-CAPTION_URL = "http://127.0.0.1:5002/caption"
 THREED_URL  = "http://127.0.0.1:5003/generate"
-CUSTOM_URL  = "http://127.0.0.1:5004/custom_describe"
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
 
 app = FastAPI(title="Gateway", version="1.3")
@@ -46,32 +44,7 @@ async def analyze(image: UploadFile = File(...)):
             raise HTTPException(502, f"NSFW service error: {e}")
     return JSONResponse(r.json(), status_code=r.status_code)
 
-# ---------- Caption (ĐÃ UPDATE) ----------
-@app.post("/caption")
-async def caption(
-    image: UploadFile = File(...),
-    prompt: str | None = Form(None),
-    max_new_tokens: int = Form(60),
-    min_new_tokens: int = Form(20) # <--- Nhận từ HTML
-):
-    data = await image.read()
-    files = {"image": (image.filename, data, image.content_type)}
-    
-    # Chuyển tiếp params sang main.py
-    params = {
-        "max_new_tokens": max_new_tokens,
-        "min_new_tokens": min_new_tokens
-    }
-    if prompt:
-        params["prompt"] = prompt
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        try:
-            r = await client.post(CAPTION_URL, files=files, params=params)
-        except Exception as e:
-            raise HTTPException(502, f"Caption service error: {e}")
-
-    return JSONResponse(r.json(), status_code=r.status_code)
 
 # ---------- 3D ----------
 @app.post("/generate3d")
@@ -117,18 +90,7 @@ async def generate3d(
         headers={"Content-Disposition": 'inline; filename="model.glb"'}
     )
 
-# --- SERVICE MỚI (CHỈ THÊM ĐOẠN NÀY) ---
-@app.post("/custom_describe")
-async def custom_describe(image: UploadFile = File(...), prompt: str = Form("Mô tả ảnh này")):
-    data = await image.read()
-    files = {"image": (image.filename, data, image.content_type)}
-    form_data = {"prompt": prompt}
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        try:
-            r = await client.post(CUSTOM_URL, files=files, data=form_data)
-        except Exception as e:
-            raise HTTPException(502, f"Custom AI service error (Port 5004): {e}")
-    return JSONResponse(r.json(), status_code=r.status_code)
+
 
 
 @app.post("/pipeline/process-all")

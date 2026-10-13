@@ -21,8 +21,5 @@ temp_*
 docs/
 *.html
 POSTMAN TEST/
-advance-image-to-text/
-blip-image-captioning-api-main/
 gateway.py
-server.py
 test_gateway.py
