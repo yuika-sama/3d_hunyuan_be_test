@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="vi" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hunyuan3D RunPod Tester</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Model Viewer for interactive 3D WebGL inspection -->
+  <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: { 50: '#eef2ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca' }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    model-viewer {
+      width: 100%;
+      height: 100%;
+      background-color: #0f172a;
+      --poster-color: transparent;
+    }
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: #1e293b; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased">
+
+  <!-- Header -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50 px-6 py-3.5 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-500/30">
+        3D
+      </div>
+      <div>
+        <h1 class="text-base font-semibold leading-tight text-white flex items-center gap-2">
+          Hunyuan3D Serverless Studio
+          <span class="text-xs font-normal px-2 py-0.5 rounded-full bg-indigo-950 text-indigo-300 border border-indigo-800">v2.1</span>
+        </h1>
+        <p class="text-xs text-slate-400">Giao diện kiểm thử RunPod Serverless & 3D GLB Inspector</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-3 text-xs">
+      <span id="connectionBadge" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
+        <span class="w-2 h-2 rounded-full bg-slate-500"></span> Chưa kết nối
+      </span>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+    <!-- Left Column: Configuration & Inputs (5 Cols) -->
+    <div class="lg:col-span-5 flex flex-col gap-5">
+
+      <!-- Target Selection Card -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
+        <div class="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
+          <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400">1. Cấu hình kết nối</h2>
+          <div class="flex bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-xs">
+            <button id="modeRunpodBtn" onclick="setMode('runpod')" class="px-2.5 py-1 rounded-md bg-indigo-600 text-white font-medium transition">RunPod API</button>
+            <button id="modeGatewayBtn" onclick="setMode('gateway')" class="px-2.5 py-1 rounded-md text-slate-400 hover:text-slate-200 transition">Local Gateway</button>
+          </div>
+        </div>
+
+        <!-- RunPod Serverless Inputs -->
+        <div id="runpodInputs" class="space-y-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">RunPod API Key</label>
+            <input type="password" id="runpodApiKey" placeholder="rpa_xxxxxxxxxxxxxxxx" 
+              class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-mono" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">RunPod Endpoint ID</label>
+            <input type="text" id="runpodEndpointId" placeholder="e.g. v2abcd1234" 
+              class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-mono" />
+          </div>
+          <div class="flex items-center gap-2 pt-1">
+            <input type="checkbox" id="useProxy" class="rounded bg-slate-950 border-slate-800 text-indigo-600 focus:ring-0 focus:ring-offset-0">
+            <label for="useProxy" class="text-xs text-slate-400 cursor-pointer">
+              Dùng Local Proxy trung gian (nếu bị lỗi CORS từ trình duyệt)
+            </label>
+          </div>
+        </div>
+
+        <!-- Local Gateway Inputs (Hidden by default) -->
+        <div id="gatewayInputs" class="space-y-3 hidden">
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Gateway URL</label>
+            <input type="text" id="gatewayUrl" value="http://127.0.0.1:8000" 
+              class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-mono" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Gateway API Key (nếu có)</label>
+            <input type="password" id="gatewayApiKey" placeholder="Bearer key..." 
+              class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-mono" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Action & Generation Options -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm space-y-4">
+        <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400 pb-2 border-b border-slate-800">2. Tùy chọn xử lý</h2>
+
+        <!-- Action Selection -->
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1.5">Action thực thi</label>
+          <div class="grid grid-cols-3 gap-2">
+            <button type="button" onclick="setAction('pipeline')" id="actionPipelineBtn"
+              class="p-2 rounded-lg border border-indigo-600 bg-indigo-950/40 text-indigo-300 font-medium text-xs text-center flex flex-col items-center gap-1">
+              <span class="font-bold">Pipeline</span>
+              <span class="text-[10px] text-slate-400">NSFW + Shape + Tex</span>
+            </button>
+            <button type="button" onclick="setAction('generate3d')" id="actionGenerate3dBtn"
+              class="p-2 rounded-lg border border-slate-800 bg-slate-950 text-slate-300 text-xs text-center flex flex-col items-center gap-1 hover:border-slate-700">
+              <span class="font-bold">Generate 3D</span>
+              <span class="text-[10px] text-slate-400">Bỏ qua NSFW</span>
+            </button>
+            <button type="button" onclick="setAction('analyze')" id="actionAnalyzeBtn"
+              class="p-2 rounded-lg border border-slate-800 bg-slate-950 text-slate-300 text-xs text-center flex flex-col items-center gap-1 hover:border-slate-700">
+              <span class="font-bold">Analyze</span>
+              <span class="text-[10px] text-slate-400">Kiểm tra NSFW CPU</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Detailed 3D Parameters (Accordion / Grid) -->
+        <div id="paramsSection" class="space-y-3 pt-2">
+          <div class="grid grid-cols-2 gap-3 text-xs">
+            <div>
+              <label class="block font-medium text-slate-300 mb-1">Texture</label>
+              <select id="paramTexture" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500">
+                <option value="true" selected>Bật (Đầy đủ màu sắc)</option>
+                <option value="false">Tắt (Chỉ lấy hình học / Mesh trắng)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block font-medium text-slate-300 mb-1">Texture Checkpoint</label>
+              <select id="paramTextureSubfolder" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500">
+                <option value="hunyuan3d-paint-v2-0" selected>Standard (hunyuan3d-paint-v2-0)</option>
+                <option value="hunyuan3d-paint-v2-0-turbo">Turbo (Nhanh hơn)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block font-medium text-slate-300 mb-1">Octree Resolution</label>
+              <select id="paramOctree" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500">
+                <option value="256">256 (Nhanh, nhẹ)</option>
+                <option value="384" selected>384 (Tiêu chuẩn)</option>
+                <option value="512">512 (Chi tiết cao)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block font-medium text-slate-300 mb-1">Số mặt (Face Count)</label>
+              <select id="paramFaces" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500">
+                <option value="20000">20,000</option>
+                <option value="40000" selected>40,000 (Khuyến nghị)</option>
+                <option value="80000">80,000</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Seed (Tùy chọn)</label>
+            <input type="number" id="paramSeed" placeholder="Mặc định: random" 
+              class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Input Image Selection -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+          <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400">3. Ảnh đầu vào</h2>
+          <button type="button" onclick="loadSampleImage()" class="text-xs text-indigo-400 hover:text-indigo-300">
+            Dùng ảnh mẫu
+          </button>
+        </div>
+
+        <div id="dropZone" 
+          class="border-2 border-dashed border-slate-700 hover:border-indigo-500 rounded-xl p-4 text-center cursor-pointer transition bg-slate-950/50 flex flex-col items-center justify-center min-h-[140px]">
+          <input type="file" id="fileInput" accept="image/png,image/jpeg,image/webp" class="hidden" onchange="handleFileSelect(event)" />
+          <div id="dropPrompt" class="space-y-1">
+            <svg class="w-8 h-8 mx-auto text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+            </svg>
+            <p class="text-xs text-slate-300 font-medium">Kéo thả ảnh vào đây, hoặc click để chọn</p>
+            <p class="text-[10px] text-slate-500">Hỗ trợ PNG, JPG (tối đa 6 MiB, tự động hỗ trợ Paste Ctrl+V)</p>
+          </div>
+          <div id="imagePreviewContainer" class="hidden flex flex-col items-center gap-2">
+            <img id="imagePreview" src="" alt="Preview" class="max-h-36 rounded-lg object-contain border border-slate-800 bg-slate-900" />
+            <div id="imageInfo" class="text-[11px] text-slate-400"></div>
+          </div>
+        </div>
+
+        <!-- Submit Button -->
+        <button id="submitBtn" onclick="startExecution()" 
+          class="w-full py-2.5 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-medium text-xs shadow-lg shadow-indigo-600/30 transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+          <svg id="btnSpinner" class="w-4 h-4 animate-spin hidden" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+          </svg>
+          <span id="btnText">Bắt đầu tạo 3D</span>
+        </button>
+      </div>
+
+    </div>
+
+    <!-- Right Column: 3D Viewer & Real-time Console (7 Cols) -->
+    <div class="lg:col-span-7 flex flex-col gap-5">
+
+      <!-- 3D Previewer Container -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm flex flex-col h-[460px]">
+        <div class="p-3 border-b border-slate-800 flex items-center justify-between bg-slate-900/60">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span class="text-xs font-semibold text-slate-300">WebGL 3D Viewer</span>
+            <span id="glbMetaBadge" class="hidden text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded border border-slate-700"></span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button id="downloadGlbBtn" onclick="downloadCurrentGlb()" disabled
+              class="px-3 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-40 text-xs font-medium flex items-center gap-1.5 transition">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+              </svg>
+              Tải file .GLB
+            </button>
+          </div>
+        </div>
+
+        <!-- 3D Canvas Area -->
+        <div class="relative flex-1 w-full bg-slate-950 flex items-center justify-center overflow-hidden">
+          <model-viewer id="modelViewer" 
+            camera-controls 
+            auto-rotate 
+            shadow-intensity="1.2" 
+            exposure="1.0"
+            ar 
+            interaction-prompt="auto"
+            alt="3D Hunyuan Generated Model"
+            class="w-full h-full">
+            <div slot="poster" class="flex flex-col items-center justify-center text-slate-500 text-xs h-full gap-2">
+              <svg class="w-12 h-12 stroke-[1.2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
+              </svg>
+              <span>Chưa có model 3D nào được load</span>
+            </div>
+          </model-viewer>
+
+          <!-- Floating Progress Overlay -->
+          <div id="progressOverlay" class="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 p-6 text-center hidden">
+            <div class="w-10 h-10 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin"></div>
+            <div>
+              <p id="progressStage" class="text-sm font-semibold text-white">Đang khởi tạo job...</p>
+              <p id="progressDetail" class="text-xs text-slate-400 mt-1">Đang kết nối đến RunPod Serverless worker</p>
+            </div>
+            <!-- Progress Bar -->
+            <div class="w-64 bg-slate-800 h-2 rounded-full overflow-hidden mt-2">
+              <div id="progressBar" class="bg-indigo-500 h-full w-0 transition-all duration-300"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Real-time Console & Status Stream -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm flex flex-col flex-1 min-h-[220px]">
+        <div class="flex items-center justify-between pb-2 border-b border-slate-800 mb-2">
+          <span class="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-indigo-400"></span> Live Events Log
+          </span>
+          <button onclick="clearLogs()" class="text-[11px] text-slate-400 hover:text-slate-200">Xóa log</button>
+        </div>
+        <div id="logConsole" class="flex-1 bg-slate-950 border border-slate-800/80 rounded-lg p-3 font-mono text-[11px] text-slate-300 overflow-y-auto max-h-48 custom-scrollbar space-y-1">
+          <div class="text-slate-500">[System] Sẵn sàng kiểm thử. Nhập API Key & Endpoint ID rồi bấm Bắt đầu.</div>
+        </div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <footer class="border-t border-slate-800 py-3 text-center text-xs text-slate-500 bg-slate-900">
+    Hunyuan3D RunPod Serverless Test Suite &bull; Persistent Global Volume: <code class="text-slate-400">/runpod-volume</code>
+  </footer>
+
+  <!-- Core JavaScript Application Logic -->
+  <script>
+    // State variables
+    let currentMode = 'runpod';
+    let currentAction = 'pipeline';
+    let selectedImageBase64 = null;
+    let currentGlbBlob = null;
+    let isProcessing = false;
+
+    // Load saved settings from localStorage
+    window.addEventListener('DOMContentLoaded', () => {
+      const savedKey = localStorage.getItem('hunyuan_runpod_key');
+      const savedEndpoint = localStorage.getItem('hunyuan_runpod_endpoint');
+      const savedGateway = localStorage.getItem('hunyuan_gateway_url');
+      if (savedKey) document.getElementById('runpodApiKey').value = savedKey;
+      if (savedEndpoint) document.getElementById('runpodEndpointId').value = savedEndpoint;
+      if (savedGateway) document.getElementById('gatewayUrl').value = savedGateway;
+      updateBadge();
+    });
+
+    function saveSettings() {
+      const key = document.getElementById('runpodApiKey').value.trim();
+      const endpoint = document.getElementById('runpodEndpointId').value.trim();
+      const gateway = document.getElementById('gatewayUrl').value.trim();
+      if (key) localStorage.setItem('hunyuan_runpod_key', key);
+      if (endpoint) localStorage.setItem('hunyuan_runpod_endpoint', endpoint);
+      if (gateway) localStorage.setItem('hunyuan_gateway_url', gateway);
+      updateBadge();
+    }
+
+    function updateBadge() {
+      const endpoint = document.getElementById('runpodEndpointId').value.trim();
+      const badge = document.getElementById('connectionBadge');
+      if (endpoint) {
+        badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400"></span> RunPod: ${endpoint}`;
+        badge.className = "flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/60 text-emerald-300 border border-emerald-800 text-xs";
+      } else {
+        badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-slate-500"></span> Chưa cấu hình`;
+        badge.className = "flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700 text-xs";
+      }
+    }
+
+    function setMode(mode) {
+      currentMode = mode;
+      const rpBtn = document.getElementById('modeRunpodBtn');
+      const gwBtn = document.getElementById('modeGatewayBtn');
+      const rpInputs = document.getElementById('runpodInputs');
+      const gwInputs = document.getElementById('gatewayInputs');
+
+      if (mode === 'runpod') {
+        rpBtn.className = "px-2.5 py-1 rounded-md bg-indigo-600 text-white font-medium transition";
+        gwBtn.className = "px-2.5 py-1 rounded-md text-slate-400 hover:text-slate-200 transition";
+        rpInputs.classList.remove('hidden');
+        gwInputs.classList.add('hidden');
+      } else {
+        gwBtn.className = "px-2.5 py-1 rounded-md bg-indigo-600 text-white font-medium transition";
+        rpBtn.className = "px-2.5 py-1 rounded-md text-slate-400 hover:text-slate-200 transition";
+        gwInputs.classList.remove('hidden');
+        rpInputs.classList.add('hidden');
+      }
+    }
+
+    function setAction(action) {
+      currentAction = action;
+      ['pipeline', 'generate3d', 'analyze'].forEach(a => {
+        const btn = document.getElementById(`action${a.charAt(0).toUpperCase() + a.slice(1)}Btn`);
+        if (a === action) {
+          btn.className = "p-2 rounded-lg border border-indigo-600 bg-indigo-950/40 text-indigo-300 font-medium text-xs text-center flex flex-col items-center gap-1";
+        } else {
+          btn.className = "p-2 rounded-lg border border-slate-800 bg-slate-950 text-slate-300 text-xs text-center flex flex-col items-center gap-1 hover:border-slate-700";
+        }
+      });
+      const params = document.getElementById('paramsSection');
+      if (action === 'analyze') {
+        params.classList.add('opacity-40', 'pointer-events-none');
+      } else {
+        params.classList.remove('opacity-40', 'pointer-events-none');
+      }
+    }
+
+    // Drag and Drop & Paste handling
+    const dropZone = document.getElementById('dropZone');
+    dropZone.addEventListener('click', () => document.getElementById('fileInput').click());
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('border-indigo-500'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('border-indigo-500'));
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('border-indigo-500');
+      if (e.dataTransfer.files.length > 0) processFile(e.dataTransfer.files[0]);
+    });
+
+    window.addEventListener('paste', (e) => {
+      if (e.clipboardData.files.length > 0) {
+        processFile(e.clipboardData.files[0]);
+      }
+    });
+
+    function handleFileSelect(event) {
+      if (event.target.files.length > 0) {
+        processFile(event.target.files[0]);
+      }
+    }
+
+    function processFile(file) {
+      if (!file.type.startsWith('image/')) {
+        alert('Vui lòng chọn file hình ảnh (PNG, JPEG, WebP)');
+        return;
+      }
+      if (file.size > 6 * 1024 * 1024) {
+        alert('Kích thước ảnh vượt quá giới hạn 6 MiB');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        selectedImageBase64 = e.target.result;
+        const img = new Image();
+        img.onload = () => {
+          document.getElementById('dropPrompt').classList.add('hidden');
+          const previewContainer = document.getElementById('imagePreviewContainer');
+          const preview = document.getElementById('imagePreview');
+          const info = document.getElementById('imageInfo');
+          preview.src = selectedImageBase64;
+          info.innerText = `${file.name} (${img.width}x${img.height} px, ${(file.size / 1024).toFixed(1)} KB)`;
+          previewContainer.classList.remove('hidden');
+          appendLog(`Đã tải ảnh: ${file.name} [${img.width}x${img.height}]`);
+        };
+        img.src = selectedImageBase64;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function loadSampleImage() {
+      // 1x1 base64 placeholder for instant test or sample
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 256;
+      const ctx = canvas.getContext('2d');
+      // Draw nice gradient sample
+      const grad = ctx.createLinearGradient(0, 0, 256, 256);
+      grad.addColorStop(0, '#4f46e5');
+      grad.addColorStop(1, '#06b6d4');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 256, 256);
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(128, 128, 60, 0, Math.PI * 2);
+      ctx.fill();
+
+      selectedImageBase64 = canvas.toDataURL('image/png');
+      document.getElementById('dropPrompt').classList.add('hidden');
+      document.getElementById('imagePreviewContainer').classList.remove('hidden');
+      document.getElementById('imagePreview').src = selectedImageBase64;
+      document.getElementById('imageInfo').innerText = "sample_test.png (256x256 px, Sample Circle)";
+      appendLog("Đã nạp ảnh mẫu (Sample Circle).");
+    }
+
+    function appendLog(message, isError = false) {
+      const consoleEl = document.getElementById('logConsole');
+      const time = new Date().toLocaleTimeString();
+      const div = document.createElement('div');
+      div.className = isError ? 'text-rose-400' : 'text-slate-300';
+      div.innerHTML = `<span class="text-slate-500">[${time}]</span> ${message}`;
+      consoleEl.appendChild(div);
+      consoleEl.scrollTop = consoleEl.scrollHeight;
+    }
+
+    function clearLogs() {
+      document.getElementById('logConsole').innerHTML = '';
+    }
+
+    function showProgress(stageText, detailText, percent) {
+      const overlay = document.getElementById('progressOverlay');
+      overlay.classList.remove('hidden');
+      document.getElementById('progressStage').innerText = stageText;
+      document.getElementById('progressDetail').innerText = detailText;
+      document.getElementById('progressBar').style.width = `${percent}%`;
+    }
+
+    function hideProgress() {
+      document.getElementById('progressOverlay').classList.add('hidden');
+    }
+
+    // Main execution function
+    async function startExecution() {
+      if (isProcessing) return;
+      if (!selectedImageBase64) {
+        alert('Vui lòng chọn hoặc kéo thả 1 hình ảnh trước khi bắt đầu!');
+        return;
+      }
+
+      saveSettings();
+
+      if (currentMode === 'runpod') {
+        const apiKey = document.getElementById('runpodApiKey').value.trim();
+        const endpointId = document.getElementById('runpodEndpointId').value.trim();
+        if (!apiKey || !endpointId) {
+          alert('Vui lòng nhập RunPod API Key và Endpoint ID!');
+          return;
+        }
+        await executeRunpod(apiKey, endpointId);
+      } else {
+        const gatewayUrl = document.getElementById('gatewayUrl').value.trim();
+        await executeGateway(gatewayUrl);
+      }
+    }
+
+    // RunPod Serverless Execution Pipeline
+    async function executeRunpod(apiKey, endpointId) {
+      isProcessing = true;
+      toggleBtnLoading(true);
+      showProgress("Đang khởi tạo job...", "Gửi request đến RunPod Serverless...", 10);
+      appendLog(`Gửi job (${currentAction}) tới Endpoint: ${endpointId}...`);
+
+      const useProxy = document.getElementById('useProxy').checked;
+      const baseUrl = useProxy ? `/proxy/${endpointId}` : `https://api.runpod.ai/v2/${endpointId}`;
+
+      const payload = {
+        input: {
+          action: currentAction,
+          image_base64: selectedImageBase64,
+          texture: document.getElementById('paramTexture').value === 'true',
+          texture_subfolder: document.getElementById('paramTextureSubfolder').value,
+          octree_resolution: parseInt(document.getElementById('paramOctree').value),
+          face_count: parseInt(document.getElementById('paramFaces').value),
+        }
+      };
+
+      const seedVal = document.getElementById('paramSeed').value.trim();
+      if (seedVal) payload.input.seed = parseInt(seedVal);
+
+      try {
+        const runRes = await fetch(`${baseUrl}/run`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (!runRes.ok) {
+          throw new Error(`RunPod HTTP ${runRes.status}: ${await runRes.text()}`);
+        }
+
+        const runData = await runRes.json();
+        const jobId = runData.id;
+        if (!jobId) throw new Error("RunPod không trả về Job ID");
+
+        appendLog(`Job ID tạo thành công: ${jobId}. Đang đợi worker nhận job...`);
+        showProgress("Job đang chạy...", `Job ID: ${jobId}`, 20);
+
+        // Polling stream chunks
+        await pollStream(baseUrl, apiKey, jobId);
+
+      } catch (err) {
+        appendLog(`LỖI: ${err.message}`, true);
+        alert(`Thất bại: ${err.message}`);
+        hideProgress();
+      } finally {
+        isProcessing = false;
+        toggleBtnLoading(false);
+      }
+    }
+
+    async function pollStream(baseUrl, apiKey, jobId) {
+      const chunksMap = new Map();
+      let fileMeta = null;
+      let isDone = false;
+      const startTime = Date.now();
+
+      while (!isDone) {
+        await new Promise(r => setTimeout(r, 2000));
+
+        const res = await fetch(`${baseUrl}/stream/${jobId}`, {
+          headers: { 'Authorization': `Bearer ${apiKey}` }
+        });
+
+        if (!res.ok) {
+          throw new Error(`Stream error HTTP ${res.status}: ${await res.text()}`);
+        }
+
+        const state = await res.json();
+        if (state.error || ['FAILED', 'CANCELLED', 'TIMED_OUT'].includes(state.status)) {
+          throw new Error(`Worker báo lỗi: ${state.error || state.status}`);
+        }
+
+        const streamEntries = state.stream || [];
+        for (const entry of streamEntries) {
+          const out = entry.output;
+          if (!out) continue;
+
+          if (out.type === 'progress') {
+            appendLog(`[Worker Stage] ${out.stage}`);
+            handleStageProgress(out.stage);
+          } else if (out.type === 'file_meta') {
+            fileMeta = out;
+            appendLog(`Nhận metadata file: ${(out.size / (1024*1024)).toFixed(2)} MB (${out.chunks} chunks)`);
+          } else if (out.type === 'file_chunk') {
+            if (!chunksMap.has(out.index)) {
+              chunksMap.set(out.index, out.data);
+              const progressPct = fileMeta ? Math.round((chunksMap.size / fileMeta.chunks) * 50) + 45 : 60;
+              showProgress("Đang nhận stream 3D GLB...", `Chunk ${chunksMap.size}/${fileMeta ? fileMeta.chunks : '?'}`, progressPct);
+            }
+          } else if (out.type === 'result' && out.action === 'analyze') {
+            appendLog(`Kết quả NSFW: ${JSON.stringify(out.data)}`);
+            if (currentAction === 'analyze') {
+              isDone = true;
+              hideProgress();
+              alert(`Kết quả NSFW: ${out.data.is_nsfw ? "CẢNH BÁO: PHÁT HIỆN NSFW" : "AN TOÀN (Safe)"}\nNhãn: ${out.data.label}`);
+              return;
+            }
+          } else if (out.type === 'done') {
+            isDone = true;
+          }
+        }
+
+        if (state.status === 'COMPLETED' && (!streamEntries || streamEntries.length === 0)) {
+          isDone = true;
+        }
+
+        // Timeout check (30 minutes)
+        if (Date.now() - startTime > 30 * 60 * 1000) {
+          throw new Error("Job timeout sau 30 phút chờ đợi.");
+        }
+      }
+
+      // Reassemble GLB
+      if (fileMeta && chunksMap.size === fileMeta.chunks) {
+        showProgress("Đang dựng model 3D...", "Ghép các chunks và kiểm tra SHA-256...", 95);
+        appendLog("Đã nhận đủ mọi chunks. Đang giải mã và hợp nhất file GLB...");
+        
+        const byteArrays = [];
+        for (let i = 0; i < fileMeta.chunks; i++) {
+          const b64 = chunksMap.get(i);
+          const binaryStr = atob(b64);
+          const bytes = new Uint8Array(binaryStr.length);
+          for (let j = 0; j < binaryStr.length; j++) {
+            bytes[j] = binaryStr.charCodeAt(j);
+          }
+          byteArrays.push(bytes);
+        }
+
+        currentGlbBlob = new Blob(byteArrays, { type: 'model/gltf-binary' });
+        const glbUrl = URL.createObjectURL(currentGlbBlob);
+
+        // Load into Model Viewer
+        const viewer = document.getElementById('modelViewer');
+        viewer.src = glbUrl;
+
+        // Update UI
+        const sizeMb = (currentGlbBlob.size / (1024 * 1024)).toFixed(2);
+        document.getElementById('glbMetaBadge').innerText = `${sizeMb} MB | ${fileMeta.chunks} Chunks`;
+        document.getElementById('glbMetaBadge').classList.remove('hidden');
+        document.getElementById('downloadGlbBtn').removeAttribute('disabled');
+
+        appendLog(`HOÀN TẤT! File 3D GLB (${sizeMb} MB) đã sẵn sàng hiển thị trên Viewer.`);
+        hideProgress();
+      } else {
+        throw new Error("Dữ liệu stream bị thiếu hoặc không hoàn chỉnh.");
+      }
+    }
+
+    function handleStageProgress(stage) {
+      const stageMap = {
+        'decode_input': { text: 'Giải mã ảnh đầu vào...', pct: 25 },
+        'nsfw_inference': { text: 'Kiểm duyệt nội dung NSFW...', pct: 35 },
+        'shape_generation': { text: 'Đang sinh hình học 3D (Hunyuan Shape)...', pct: 45 },
+        'texture_generation': { text: 'Đang tô màu & vẽ chất liệu (Hunyuan Paint)...', pct: 65 },
+        'export_glb': { text: 'Đang đóng gói file GLB...', pct: 85 },
+      };
+      if (stageMap[stage]) {
+        showProgress(stageMap[stage].text, `Giai đoạn: ${stage}`, stageMap[stage].pct);
+      }
+    }
+
+    function downloadCurrentGlb() {
+      if (!currentGlbBlob) return;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(currentGlbBlob);
+      a.download = `hunyuan3d_${Date.now()}.glb`;
+      a.click();
+    }
+
+    function toggleBtnLoading(loading) {
+      const btn = document.getElementById('submitBtn');
+      const spinner = document.getElementById('btnSpinner');
+      const txt = document.getElementById('btnText');
+      btn.disabled = loading;
+      if (loading) {
+        spinner.classList.remove('hidden');
+        txt.innerText = "Đang xử lý...";
+      } else {
+        spinner.classList.add('hidden');
+        txt.innerText = "Bắt đầu tạo 3D";
+      }
+    }
+
+    // Local Gateway fallback
+    async function executeGateway(gatewayUrl) {
+      appendLog(`Chế độ Local Gateway: Đang kết nối ${gatewayUrl}...`);
+      alert("Để gọi Local Gateway, đảm bảo bạn đã khởi động `python gateway.py` tại local.");
+    }
+  </script>
+</body>
+</html>

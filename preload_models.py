@@ -40,6 +40,8 @@ if VOLUME_PATH:
 os.environ["HF_HUB_DISABLE_XET"] = "1"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "600"
+os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 if os.getenv("HF_TOKEN") and "HUGGING_FACE_HUB_TOKEN" not in os.environ:
     os.environ["HUGGING_FACE_HUB_TOKEN"] = os.getenv("HF_TOKEN")
 
@@ -142,15 +144,33 @@ def preload(full_texture: bool = False, include_nsfw: bool = False):
 
     if include_nsfw:
         print("[PRELOAD] 4/4 Checking / downloading NSFW classification model...")
+        nsfw_name = os.getenv("NSFW_MODEL_NAME", "strangerguardhf/nsfw_image_detection")
         try:
             from transformers import AutoImageProcessor, SiglipForImageClassification
-            nsfw_name = os.getenv("NSFW_MODEL_NAME", "strangerguardhf/nsfw_image_detection")
-            AutoImageProcessor.from_pretrained(nsfw_name)
-            SiglipForImageClassification.from_pretrained(nsfw_name)
+            try:
+                AutoImageProcessor.from_pretrained(nsfw_name)
+                SiglipForImageClassification.from_pretrained(nsfw_name)
+            except Exception as load_err:
+                print(f"[PRELOAD WARNING] Initial NSFW load failed ({load_err}). Cleaning corrupt cache and retrying...")
+                import shutil
+                from pathlib import Path
+                hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+                for repo_name in ["models--strangerguardhf--nsfw_image_detection", "models--strangerguardhf--nsfw-image-detection"]:
+                    repo_dir = Path(hf_home) / "hub" / repo_name
+                    if repo_dir.exists():
+                        print(f"[PRELOAD REPAIR] Removing corrupt cache at {repo_dir}")
+                        shutil.rmtree(repo_dir, ignore_errors=True)
+                fallback_name = "strangerguardhf/nsfw-image-detection" if nsfw_name == "strangerguardhf/nsfw_image_detection" else nsfw_name
+                try:
+                    AutoImageProcessor.from_pretrained(nsfw_name, force_download=True)
+                    SiglipForImageClassification.from_pretrained(nsfw_name, force_download=True)
+                except Exception:
+                    AutoImageProcessor.from_pretrained(fallback_name, force_download=True)
+                    SiglipForImageClassification.from_pretrained(fallback_name, force_download=True)
             print("[PRELOAD] NSFW classification model ready.")
         except Exception as e:
             print(f"[PRELOAD WARNING] NSFW model preload failed: {e}")
-            failures.append("nsfw")
+            # NSFW is optional and handled gracefully with fallback in runpod_handler
 
     if failures:
         raise RuntimeError(f"Model preload failed: {', '.join(failures)}")

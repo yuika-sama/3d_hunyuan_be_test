@@ -43,6 +43,8 @@ if RUNPOD_VOLUME_PATH:
 os.environ["HF_HUB_DISABLE_XET"] = "1"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "600"
+os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 if os.getenv("HF_TOKEN") and "HUGGING_FACE_HUB_TOKEN" not in os.environ:
     os.environ["HUGGING_FACE_HUB_TOKEN"] = os.getenv("HF_TOKEN")
 
@@ -332,10 +334,32 @@ class ModelManager:
             logger.info(f"Loading NSFW model ({NSFW_MODEL_NAME}) on CPU...")
             from transformers import AutoImageProcessor, SiglipForImageClassification
 
-            self.nsfw_processor = AutoImageProcessor.from_pretrained(NSFW_MODEL_NAME)
-            self.nsfw_model = SiglipForImageClassification.from_pretrained(
-                NSFW_MODEL_NAME
-            ).to("cpu")
+            try:
+                self.nsfw_processor = AutoImageProcessor.from_pretrained(NSFW_MODEL_NAME)
+                self.nsfw_model = SiglipForImageClassification.from_pretrained(
+                    NSFW_MODEL_NAME
+                ).to("cpu")
+            except Exception as exc:
+                logger.warning(f"Initial NSFW load failed ({exc}). Cleaning corrupt cache and retrying...")
+                import shutil
+                from pathlib import Path
+                hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+                for repo_name in ["models--strangerguardhf--nsfw_image_detection", "models--strangerguardhf--nsfw-image-detection"]:
+                    repo_dir = Path(hf_home) / "hub" / repo_name
+                    if repo_dir.exists():
+                        logger.info(f"Removing corrupt cache at {repo_dir}")
+                        shutil.rmtree(repo_dir, ignore_errors=True)
+                fallback_name = "strangerguardhf/nsfw-image-detection" if NSFW_MODEL_NAME == "strangerguardhf/nsfw_image_detection" else NSFW_MODEL_NAME
+                try:
+                    self.nsfw_processor = AutoImageProcessor.from_pretrained(NSFW_MODEL_NAME, force_download=True)
+                    self.nsfw_model = SiglipForImageClassification.from_pretrained(
+                        NSFW_MODEL_NAME, force_download=True
+                    ).to("cpu")
+                except Exception:
+                    self.nsfw_processor = AutoImageProcessor.from_pretrained(fallback_name, force_download=True)
+                    self.nsfw_model = SiglipForImageClassification.from_pretrained(
+                        fallback_name, force_download=True
+                    ).to("cpu")
             self.nsfw_model.eval()
             logger.info("NSFW model loaded successfully on CPU.")
         return self.nsfw_processor, self.nsfw_model

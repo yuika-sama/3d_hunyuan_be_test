@@ -44,9 +44,12 @@ else
 fi
 
 # Export Hugging Face download configuration
+# IMPORTANT for RunPod Global Volumes (S3/FUSE): Disable symlinks to prevent broken references and chmod errors
 export HF_HUB_DISABLE_XET="1"
 export HF_HUB_ENABLE_HF_TRANSFER="0"
 export HF_HUB_DOWNLOAD_TIMEOUT="600"
+export HF_HUB_DISABLE_SYMLINKS="1"
+export HF_HUB_DISABLE_SYMLINKS_WARNING="1"
 
 # Propagate HF_TOKEN to HUGGING_FACE_HUB_TOKEN if set
 if [ -n "$HF_TOKEN" ] && [ -z "$HUGGING_FACE_HUB_TOKEN" ]; then
@@ -56,7 +59,14 @@ fi
 # 2. Preload / verify models before announcing worker ready to Runpod
 if [ "${PRELOAD_MODELS:-1}" = "1" ]; then
     echo "[STARTUP] Verifying / pre-downloading models to cache before accepting jobs..."
-    python3 /app/preload_models.py --full --nsfw
+    if ! python3 /app/preload_models.py --full --nsfw; then
+        echo "[STARTUP WARNING] Model preload reported warnings or errors."
+        if [ "${PRELOAD_FAIL_FATAL:-0}" = "1" ]; then
+            echo "[STARTUP ERROR] PRELOAD_FAIL_FATAL=1 is set. Exiting container."
+            exit 1
+        fi
+        echo "[STARTUP WARNING] Continuing to start handler (missing models will be fetched or handled gracefully on-demand)..."
+    fi
 fi
 
 # 3. Start Runpod Serverless Python Worker

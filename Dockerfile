@@ -10,6 +10,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     FORCE_CUDA="1" \
     HF_HUB_DISABLE_XET="1" \
     HF_HUB_ENABLE_HF_TRANSFER="0" \
+    HF_HUB_DISABLE_SYMLINKS="1" \
+    HF_HUB_DISABLE_SYMLINKS_WARNING="1" \
     PYTHONPATH="/app:/app/3d_generative/Hunyuan3D-2-main" \
     RUNPOD_VOLUME_PATH="/runpod-volume"
 
