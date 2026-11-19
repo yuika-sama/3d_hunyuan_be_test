@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   workflow_dispatch:
 
 permissions:
@@ -27,12 +30,20 @@ jobs:
         with:
           python-version: '3.10'
           cache: 'pip'
+          cache-dependency-path: requirements-runpod.txt
 
       - name: Install Test Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
           pip install "numpy<2" pillow httpx runpod==2.3.0 pytest fastapi python-multipart
+
+      - name: Build and test the native texture module
+        working-directory: 3d_generative/Hunyuan3D-2-main/hy3dgen/texgen/differentiable_renderer
+        run: |
+          pip install pybind11
+          python setup.py build_ext --inplace
+          python -m pytest "$GITHUB_WORKSPACE/test_native_texture.py" -q
 
       - name: Run Pytest
         run: |
@@ -95,8 +106,8 @@ jobs:
           tags: |
             ${{ env.tag_commit }}
             ${{ env.tag_latest }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=min
+          cache-from: type=registry,ref=${{ env.tag_latest }}
+          cache-to: type=inline
 
   deploy-runpod:
     name: Update Runpod & Analysis Smoke Test

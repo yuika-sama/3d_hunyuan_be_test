@@ -388,9 +388,8 @@ class ModelManager:
                 HUNYUAN_TEX_MODEL, subfolder=target_subfolder
             )
             tex_pipeline._loaded_subfolder = target_subfolder
-            self.offload_tex_pipeline(tex_pipeline)
             self.hunyuan_worker["tex_pipeline"] = tex_pipeline
-            logger.info("Texture pipeline loaded and offloaded to CPU.")
+            logger.info("Texture pipeline loaded.")
         except Exception as e:
             logger.error(f"Failed to load texture model: {e}\n{traceback.format_exc()}")
             if target_subfolder != "hunyuan3d-paint-v2-0-turbo":
@@ -400,9 +399,8 @@ class ModelManager:
                         HUNYUAN_TEX_MODEL, subfolder="hunyuan3d-paint-v2-0-turbo"
                     )
                     tex_pipeline._loaded_subfolder = "hunyuan3d-paint-v2-0-turbo"
-                    self.offload_tex_pipeline(tex_pipeline)
                     self.hunyuan_worker["tex_pipeline"] = tex_pipeline
-                    logger.info("Fallback turbo texture pipeline loaded and offloaded to CPU.")
+                    logger.info("Fallback turbo texture pipeline loaded.")
                 except Exception as e2:
                     logger.error(f"Fallback turbo texture model also failed: {e2}")
                     self.hunyuan_worker["tex_pipeline"] = None
@@ -555,7 +553,7 @@ def handle_generate3d(
     }
 
     hunyuan = model_manager.load_hunyuan(
-        load_texture=enable_texture, texture_subfolder=tex_subfolder,
+        load_texture=False,
     )
     rembg = hunyuan["rembg"]
     shape_pipeline = hunyuan["shape_pipeline"]

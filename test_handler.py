@@ -346,7 +346,7 @@ class TestRunpodHandler(unittest.TestCase):
         mock_load_hunyuan.return_value = {
             "rembg": mock_rembg,
             "shape_pipeline": mock_shape_pipe,
-            "tex_pipeline": mock_tex_pipe,
+            "tex_pipeline": None,
         }
 
         mock_shapegen = MagicMock()
@@ -371,12 +371,14 @@ class TestRunpodHandler(unittest.TestCase):
                     "texture": True,
                 }
             }
-            events = list(handler(job))
+            with patch.object(runpod_handler.model_manager, "load_tex_pipeline", return_value=mock_tex_pipe) as load_tex:
+                events = list(handler(job))
+            load_tex.assert_called_once_with(subfolder=runpod_handler.HUNYUAN_TEX_SUBFOLDER)
 
         stages = [e["stage"] for e in events if e.get("type") == "progress"]
         self.assertIn("texture_generation", stages)
         mock_load_hunyuan.assert_called_once_with(
-            load_texture=True, texture_subfolder=runpod_handler.HUNYUAN_TEX_SUBFOLDER,
+            load_texture=False,
         )
         mock_move.assert_called_once()
         mock_offload.assert_called_once()
@@ -602,7 +604,7 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertIn("else torch.float32", component_source)
         self.assertIn("else torch.float32", delight_source)
         preload_source = (Path(__file__).parent / "preload_models.py").read_text(encoding="utf-8")
-        self.assertIn('tex_pipeline.to("cpu")', preload_source)
+        self.assertIn('Hunyuan3DPaintPipeline.resolve_config(', preload_source)
         self.assertNotIn('m.pipeline.to("cpu")', preload_source)
 
     def test_texture_delight_disabled_by_default_and_preserves_colors(self):
@@ -709,7 +711,8 @@ class TestInputSafety(unittest.TestCase):
                 patch.dict(os.environ, {"HUNYUAN_TEX_MODEL": "test/model",
                                         "HUNYUAN_TEX_SUBFOLDER": "hunyuan3d-paint-v2-0-turbo"}):
             preload_models.preload(full_texture=True)
-        texgen.Hunyuan3DPaintPipeline.from_pretrained.assert_called_once_with(
+        texgen.Hunyuan3DPaintPipeline.from_pretrained.assert_not_called()
+        texgen.Hunyuan3DPaintPipeline.resolve_config.assert_called_once_with(
             "test/model", subfolder="hunyuan3d-paint-v2-0-turbo",
         )
 

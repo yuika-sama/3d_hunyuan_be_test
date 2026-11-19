@@ -15,8 +15,10 @@ Phạm vi bản sửa: worker, gateway thử nghiệm, tests và quy trình ki�
 - Gateway kiểm tra ảnh thật, đọc có giới hạn, kiểm duyệt cả hai route sinh GLB và kiểm tra header GLB.
 - Gateway yêu cầu `GATEWAY_API_KEY`; run.bat chỉ mở loopback, không tự chạy ngrok.
 - Local worker khóa việc tạo model để không có hai thread đồng thời di chuyển model CPU/GPU.
-- Preload startup thất bại làm container dừng; build-time preload vẫn best-effort vì build runner
-  có thể không tải được weights. `PRELOAD_MODELS=0` chỉ dành cho chẩn đoán/lazy load.
+- Docker cache checkpoint shape và bộ biên dịch native theo từng layer. Build dừng nếu tải weights lỗi.
+- Khi khởi động, worker kiểm tra cache paint. Sau bước dựng hình, worker mới khởi tạo pipeline paint để tạo texture.
+  Log GPU có các mốc UV, render, multiview, bake và inpaint để xác định bước đang chạy.
+  `PRELOAD_MODELS=0` cho phép tải weights khi xử lý yêu cầu đầu tiên.
 - Khóa torch/torchvision/Runpod SDK; chưa phải lockfile đầy đủ cho mọi dependency native.
 - Giữ error-event contract: SDK 2.3.0 nhận `error` và báo job lỗi; đã test qua SDK với HTTP mock.
 - CI không bỏ qua deploy HTTP lỗi và không dùng regex COMPLETED làm bằng chứng inference.

@@ -51,21 +51,20 @@ COPY requirements-runpod.txt /app/requirements-runpod.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install -r /app/requirements-runpod.txt
 
-# Copy Hunyuan3D-2 codebase and compile C++/CUDA native rasterizers
-COPY 3d_generative/Hunyuan3D-2-main /app/3d_generative/Hunyuan3D-2-main
-
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip3 install --no-deps -e /app/3d_generative/Hunyuan3D-2-main && \
-    cd /app/3d_generative/Hunyuan3D-2-main/hy3dgen/texgen/custom_rasterizer && \
-    python3 setup.py install && \
-    cd /app/3d_generative/Hunyuan3D-2-main/hy3dgen/texgen/differentiable_renderer && \
-    python3 setup.py install && \
-    rm -rf /usr/local/cuda/targets/x86_64-linux/lib/*_static.a /app/3d_generative/Hunyuan3D-2-main/hy3dgen/texgen/*/build
-
-# Pre-download rembg and Hunyuan3D shape model into Docker image layer (cached layer)
+# Cache weights independently of changes to the renderer and worker.
+COPY 3d_generative/Hunyuan3D-2-main/hy3dgen/rembg.py /app/3d_generative/Hunyuan3D-2-main/hy3dgen/rembg.py
 COPY preload_models.py /app/preload_models.py
-RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 /app/preload_models.py || true
+RUN python3 /app/preload_models.py
+
+COPY 3d_generative/Hunyuan3D-2-main/hy3dgen/texgen/custom_rasterizer /tmp/custom_rasterizer
+RUN cd /tmp/custom_rasterizer && python3 setup.py install && rm -rf /tmp/custom_rasterizer
+
+# Build beside the Python fallback for the package-relative import.
+COPY 3d_generative/Hunyuan3D-2-main/hy3dgen/texgen/differentiable_renderer/setup.py 3d_generative/Hunyuan3D-2-main/hy3dgen/texgen/differentiable_renderer/mesh_processor.cpp /app/3d_generative/Hunyuan3D-2-main/hy3dgen/texgen/differentiable_renderer/
+RUN cd /app/3d_generative/Hunyuan3D-2-main/hy3dgen/texgen/differentiable_renderer && python3 setup.py build_ext --inplace && rm -rf build && \
+    python3 -c "import mesh_processor as m; assert m.__file__.endswith('.so'), m.__file__"
+
+COPY 3d_generative/Hunyuan3D-2-main /app/3d_generative/Hunyuan3D-2-main
 
 # Copy application handler and entrypoint (code changes here will NOT bust cache above)
 COPY runpod_handler.py /app/runpod_handler.py

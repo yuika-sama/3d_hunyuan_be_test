@@ -59,6 +59,11 @@ class Hunyuan3DTexGenConfig:
 class Hunyuan3DPaintPipeline:
     @classmethod
     def from_pretrained(cls, model_path, subfolder=None, **config_kwargs):
+        return cls(cls.resolve_config(model_path, subfolder, **config_kwargs))
+
+    @staticmethod
+    def resolve_config(model_path, subfolder=None, **config_kwargs):
+        """Resolve the cached weights without allocating a GPU pipeline."""
         if subfolder is None:
             subfolder = os.environ.get('HUNYUAN_TEX_SUBFOLDER', 'hunyuan3d-paint-v2-0')
         required_weights = [
@@ -122,19 +127,19 @@ class Hunyuan3DPaintPipeline:
                             raise FileNotFoundError("Downloaded texture model is incomplete")
                     delight_model_path = os.path.join(resolved_path, 'hunyuan3d-delight-v2-0')
                     multiview_model_path = os.path.join(resolved_path, subfolder)
-                    return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder, **config_kwargs))
+                    return Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder, **config_kwargs)
                 except Exception as e:
                     import traceback
                     traceback.print_exc()
                     raise RuntimeError(f"Something wrong while loading {original_model_path}: {e}")
             else:
-                return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder, **config_kwargs))
+                return Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder, **config_kwargs)
         else:
             if not has_required_weights(model_path):
                 raise FileNotFoundError(f"Texture model is incomplete: {model_path}")
             delight_model_path = os.path.join(model_path, 'hunyuan3d-delight-v2-0')
             multiview_model_path = os.path.join(model_path, subfolder)
-            return cls(Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder, **config_kwargs))
+            return Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder, **config_kwargs)
             
     def __init__(self, config):
         self.config = config
@@ -289,7 +294,7 @@ class Hunyuan3DPaintPipeline:
         images_prompt = [self.recenter_image(image_prompt) for image_prompt in images_prompt]
 
         # Ensure multiview_model is offloaded to CPU while delight_model runs to prevent simultaneous VRAM spikes
-        if 'multiview_model' in self.models and self.models['multiview_model'] is not None:
+        if enable_delight and self.models.get('multiview_model') is not None:
             if hasattr(self.models['multiview_model'], 'to'):
                 self.models['multiview_model'].to('cpu')
             if torch.cuda.is_available():
@@ -311,6 +316,7 @@ class Hunyuan3DPaintPipeline:
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
+        logger.info("Texture stage: UV unwrap")
         mesh = mesh_uv_wrap(mesh)
 
         if hasattr(self.render, 'to'):
@@ -320,11 +326,13 @@ class Hunyuan3DPaintPipeline:
         selected_camera_elevs, selected_camera_azims, selected_view_weights = \
             self.config.candidate_camera_elevs, self.config.candidate_camera_azims, self.config.candidate_view_weights
 
+        logger.info("Texture stage: render control views")
         normal_maps = self.render_normal_multiview(
             selected_camera_elevs, selected_camera_azims, use_abs_coor=True)
         position_maps = self.render_position_multiview(
             selected_camera_elevs, selected_camera_azims)
 
+        logger.info("Texture stage: multiview diffusion")
         # Stage 2: Multiview generation (Sequential VRAM management)
         camera_info = [(((azim // 30) + 9) % 12) // {-20: 1, 0: 1, 20: 1, -90: 3, 90: 3}[
             elev] + {-20: 0, 0: 12, 20: 24, -90: 36, 90: 40}[elev] for azim, elev in
@@ -349,12 +357,14 @@ class Hunyuan3DPaintPipeline:
             multiviews[i] = multiviews[i].resize(render_res, Image.Resampling.LANCZOS)
 
         # Stage 3: Texture baking and inpainting
+        logger.info("Texture stage: bake texture")
         texture, mask = self.bake_from_multiview(multiviews,
                                                  selected_camera_elevs, selected_camera_azims, selected_view_weights,
                                                  method=self.config.merge_method)
 
         mask_np = (mask.squeeze(-1).cpu().numpy() * 255).astype(np.uint8)
 
+        logger.info("Texture stage: inpaint texture")
         texture = self.texture_inpaint(texture, mask_np)
 
         self.render.set_texture(texture)

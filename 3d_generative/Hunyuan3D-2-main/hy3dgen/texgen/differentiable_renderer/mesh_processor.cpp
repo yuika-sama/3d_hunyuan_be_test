@@ -105,8 +105,8 @@ vtx_pos_ptr[vtx_idx * 3 + 1], vtx_pos_ptr[vtx_idx * 3 + 2]};
     }
 
     // Create new arrays for the output
-    py::array_t<float> new_texture(texture_buf.size);
-    py::array_t<uint8_t> new_mask(mask_buf.size);
+    py::array_t<float> new_texture(texture_buf.shape);
+    py::array_t<uint8_t> new_mask(mask_buf.shape);
 
     auto new_texture_buf = new_texture.request();
     auto new_mask_buf = new_mask.request();
@@ -134,17 +134,32 @@ vtx_pos_ptr[vtx_idx * 3 + 1], vtx_pos_ptr[vtx_idx * 3 + 2]};
         }
     }
 
-    // Reshape the new arrays to match the original texture and mask shapes
-    new_texture.resize({texture_height, texture_width, 3});
-    new_mask.resize({texture_height, texture_width});
   return std::make_pair(new_texture, new_mask);
 }
 
 
-std::pair<py::array_t<float>, py::array_t<uint8_t>> meshVerticeInpaint(py::array_t<float> texture,
-          py::array_t<uint8_t> mask,
-          py::array_t<float> vtx_pos, py::array_t<float> vtx_uv,
-          py::array_t<int> pos_idx, py::array_t<int> uv_idx, const std::string& method = "smooth") {
+template<typename T>
+using ContiguousArray = py::array_t<T, py::array::c_style | py::array::forcecast>;
+
+std::pair<py::array_t<float>, py::array_t<uint8_t>> meshVerticeInpaint(ContiguousArray<float> texture,
+          ContiguousArray<uint8_t> mask,
+          ContiguousArray<float> vtx_pos, ContiguousArray<float> vtx_uv,
+          ContiguousArray<int> pos_idx, ContiguousArray<int> uv_idx, const std::string& method = "smooth") {
+    if (texture.ndim() != 3 || texture.shape(2) != 3 || !texture.shape(0) || !texture.shape(1) ||
+        mask.ndim() != 2 || mask.shape(0) != texture.shape(0) || mask.shape(1) != texture.shape(1) ||
+        vtx_pos.ndim() != 2 || vtx_pos.shape(1) != 3 || vtx_uv.ndim() != 2 || vtx_uv.shape(1) != 2 ||
+        pos_idx.ndim() != 2 || pos_idx.shape(1) != 3 || uv_idx.ndim() != 2 ||
+        uv_idx.shape(1) != 3 || pos_idx.shape(0) != uv_idx.shape(0))
+        throw std::invalid_argument("Invalid mesh or texture dimensions");
+    for (py::ssize_t i = 0; i < pos_idx.size(); ++i) {
+        if (pos_idx.data()[i] < 0 || pos_idx.data()[i] >= vtx_pos.shape(0) ||
+            uv_idx.data()[i] < 0 || uv_idx.data()[i] >= vtx_uv.shape(0))
+            throw std::invalid_argument("Invalid mesh index");
+    }
+    for (py::ssize_t i = 0; i < vtx_uv.size(); ++i) {
+        float uv = vtx_uv.data()[i];
+        if (!(uv >= 0 && uv <= 1)) throw std::invalid_argument("UV outside texture");
+    }
     if (method == "smooth") {
         return meshVerticeInpaint_smooth(texture, mask, vtx_pos, vtx_uv, pos_idx, uv_idx);
     } else {
