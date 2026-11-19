@@ -716,6 +716,38 @@ class TestInputSafety(unittest.TestCase):
             "test/model", subfolder="hunyuan3d-paint-v2-0-turbo",
         )
 
+    def test_preload_nsfw_option_downloads_classification_model(self):
+        import os
+        mock_transformers = MagicMock()
+        mock_proc = MagicMock()
+        mock_model = MagicMock()
+        mock_transformers.AutoImageProcessor.from_pretrained.return_value = mock_proc
+        mock_transformers.SiglipForImageClassification.from_pretrained.return_value = mock_model
+        with patch.dict("sys.modules", {
+            "hy3dgen": MagicMock(),
+            "hy3dgen.rembg": MagicMock(),
+            "transformers": mock_transformers,
+        }), patch.object(preload_models, "preload_shape_checkpoint"):
+            preload_models.preload(full_texture=False, include_nsfw=True)
+            expected_model = os.getenv("NSFW_MODEL_NAME", "strangerguardhf/nsfw_image_detection")
+            mock_transformers.AutoImageProcessor.from_pretrained.assert_called_once_with(expected_model)
+            mock_transformers.SiglipForImageClassification.from_pretrained.assert_called_once_with(expected_model)
+
+    def test_network_volume_cache_redirection_creates_subdirectories(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_vol:
+            with patch.dict(os.environ, {"RUNPOD_VOLUME_PATH": tmp_vol}):
+                self.assertEqual(preload_models.resolve_volume_path(), tmp_vol)
+                self.assertEqual(runpod_handler.resolve_volume_path(), tmp_vol)
+            expected_hf = os.path.join(tmp_vol, "huggingface")
+            expected_torch = os.path.join(tmp_vol, "cache", "torch")
+            expected_u2net = os.path.join(tmp_vol, "cache", "u2net")
+            expected_hy3d = os.path.join(tmp_vol, "models")
+            for d in [expected_hf, expected_torch, expected_u2net, expected_hy3d]:
+                os.makedirs(d, exist_ok=True)
+                self.assertTrue(os.path.isdir(d))
+
     def test_closing_shape_generator_offloads_pipeline(self):
         shape = MagicMock()
         with patch.dict("sys.modules", {"hy3dgen": MagicMock(), "hy3dgen.shapegen": MagicMock()}), \

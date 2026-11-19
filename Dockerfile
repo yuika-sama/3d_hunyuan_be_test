@@ -10,7 +10,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     FORCE_CUDA="1" \
     HF_HUB_DISABLE_XET="1" \
     HF_HUB_ENABLE_HF_TRANSFER="0" \
-    PYTHONPATH="/app:/app/3d_generative/Hunyuan3D-2-main"
+    PYTHONPATH="/app:/app/3d_generative/Hunyuan3D-2-main" \
+    RUNPOD_VOLUME_PATH="/runpod-volume"
 
 # Install Python 3.10 and necessary system packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -51,11 +52,7 @@ COPY requirements-runpod.txt /app/requirements-runpod.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install -r /app/requirements-runpod.txt
 
-# Cache weights independently of changes to the renderer and worker.
-COPY 3d_generative/Hunyuan3D-2-main/hy3dgen/rembg.py /app/3d_generative/Hunyuan3D-2-main/hy3dgen/rembg.py
-COPY preload_models.py /app/preload_models.py
-RUN python3 /app/preload_models.py
-
+# Build native custom rasterizer and differentiable renderer
 COPY 3d_generative/Hunyuan3D-2-main/hy3dgen/texgen/custom_rasterizer /tmp/custom_rasterizer
 RUN cd /tmp/custom_rasterizer && python3 setup.py install && rm -rf /tmp/custom_rasterizer
 
@@ -66,7 +63,8 @@ RUN cd /app/3d_generative/Hunyuan3D-2-main/hy3dgen/texgen/differentiable_rendere
 
 COPY 3d_generative/Hunyuan3D-2-main /app/3d_generative/Hunyuan3D-2-main
 
-# Copy application handler and entrypoint (code changes here will NOT bust cache above)
+# Copy application handler, preload helper, and entrypoint
+COPY preload_models.py /app/preload_models.py
 COPY runpod_handler.py /app/runpod_handler.py
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh

@@ -15,10 +15,11 @@ Phạm vi bản sửa: worker, gateway thử nghiệm, tests và quy trình ki�
 - Gateway kiểm tra ảnh thật, đọc có giới hạn, kiểm duyệt cả hai route sinh GLB và kiểm tra header GLB.
 - Gateway yêu cầu `GATEWAY_API_KEY`; run.bat chỉ mở loopback, không tự chạy ngrok.
 - Local worker khóa việc tạo model để không có hai thread đồng thời di chuyển model CPU/GPU.
-- Docker cache checkpoint shape và bộ biên dịch native theo từng layer. Build dừng nếu tải weights lỗi.
-- Khi khởi động, worker kiểm tra cache paint. Sau bước dựng hình, worker mới khởi tạo pipeline paint để tạo texture.
+- Docker image nhẹ tối đa: tách biệt toàn bộ weights/models ra khỏi build layer. Weights được lưu trữ bền vững trên Network Volume (/runpod-volume) thay vì nướng cứng vào image.
+- Khi khởi động, worker tự động phát hiện Network Volume (/runpod-volume) và trỏ các cache directory (HF_HOME, TORCH_HOME, U2NET_HOME, HY3DGEN_MODELS) vào volume.
+  Nếu model chưa có trên volume, worker tự động tải về volume ở lần chạy đầu tiên. Ở các lần khởi động tiếp theo, worker tái sử dụng cache từ volume, giảm thiểu Cold Start xuống chỉ vài giây.
   Log GPU có các mốc UV, render, multiview, bake và inpaint để xác định bước đang chạy.
-  `PRELOAD_MODELS=0` cho phép tải weights khi xử lý yêu cầu đầu tiên.
+  `PRELOAD_MODELS=0` cho phép bỏ qua bước kiểm tra/tải trước lúc khởi động và chỉ tải khi có yêu cầu đầu tiên.
 - Khóa torch/torchvision/Runpod SDK; chưa phải lockfile đầy đủ cho mọi dependency native.
 - Giữ error-event contract: SDK 2.3.0 nhận `error` và báo job lỗi; đã test qua SDK với HTTP mock.
 - CI không bỏ qua deploy HTTP lỗi và không dùng regex COMPLETED làm bằng chứng inference.
@@ -68,8 +69,10 @@ Workflow kích hoạt khi push nhánh `main` hoặc Run workflow thủ công.
    Container entrypoint là `start.sh` → `runpod_handler.py`.
 4. Ban đầu đặt min workers 0, max workers 1, concurrency 1. Thử tier 24 GB VRAM;
    nếu OOM, xem stage/RAM trước khi đổi GPU. Repo lai/offload chưa có số đo cam kết.
-5. Bảo đảm disk/RAM đủ chứa weights và CPU-offloaded models; theo dõi log tải model.
-   Nếu dùng network volume cho cache, trỏ HF_HOME vào volume đã mount theo cấu hình Runpod.
+5. Gắn Network Volume (mount tại `/runpod-volume`). Worker sẽ tự động trỏ toàn bộ cache
+   (`HF_HOME`, `TORCH_HOME`, `U2NET_HOME`, `HY3DGEN_MODELS`) vào volume. Dung lượng Container Disk chỉ cần
+   đặt tối thiểu khoảng 15–20 GB (vì image không còn chứa model nặng); Network Volume nên từ 50–100 GB.
+   Tải model lần đầu sẽ lưu vĩnh viễn vào Network Volume, các lần worker sau sẽ khởi động ngay lập tức.
 6. Đặt GitHub Secret `RUNPOD_API_KEY` có quyền `serverless:write` và quyền gọi job
    trên endpoint thử nghiệm. Đặt GitHub Variables `RUNPOD_ENDPOINT_ID` trỏ tới endpoint đó.
    Workflow cập nhật trường `image` trực tiếp trên endpoint qua Runpod REST API v2.

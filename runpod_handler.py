@@ -9,10 +9,42 @@ Supports 3 actions:
 import os
 import sys
 
+# Configure volume-based cache paths if Global Volume or Network Volume is mounted
+def resolve_volume_path() -> str:
+    custom = os.getenv("RUNPOD_VOLUME_PATH")
+    if custom and os.path.isdir(custom):
+        return custom
+    if os.path.isdir("/runpod-volume"):
+        return "/runpod-volume"
+    if os.path.isdir("/workspace") and os.access("/workspace", os.W_OK):
+        return "/workspace"
+    return ""
+
+RUNPOD_VOLUME_PATH = resolve_volume_path()
+if RUNPOD_VOLUME_PATH:
+    os.environ.setdefault("HF_HOME", os.path.join(RUNPOD_VOLUME_PATH, "huggingface"))
+    os.environ.setdefault("TORCH_HOME", os.path.join(RUNPOD_VOLUME_PATH, "cache", "torch"))
+    os.environ.setdefault("U2NET_HOME", os.path.join(RUNPOD_VOLUME_PATH, "cache", "u2net"))
+    os.environ.setdefault("HY3DGEN_MODELS", os.path.join(RUNPOD_VOLUME_PATH, "models"))
+    os.environ.setdefault("TRITON_CACHE_DIR", os.path.join(RUNPOD_VOLUME_PATH, "cache", "triton"))
+    for _p in (
+        os.environ["HF_HOME"],
+        os.environ["TORCH_HOME"],
+        os.environ["U2NET_HOME"],
+        os.environ["HY3DGEN_MODELS"],
+        os.environ["TRITON_CACHE_DIR"],
+    ):
+        try:
+            os.makedirs(_p, exist_ok=True)
+        except OSError:
+            pass
+
 # Hugging Face download configuration (must be set before any HF / transformers / diffusers imports)
 os.environ["HF_HUB_DISABLE_XET"] = "1"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "600"
+if os.getenv("HF_TOKEN") and "HUGGING_FACE_HUB_TOKEN" not in os.environ:
+    os.environ["HUGGING_FACE_HUB_TOKEN"] = os.getenv("HF_TOKEN")
 
 import base64
 import gc
@@ -81,6 +113,13 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger("runpod_handler")
+
+if RUNPOD_VOLUME_PATH and os.path.isdir(RUNPOD_VOLUME_PATH):
+    logger.info(f"Persistent RunPod Volume detected at: {RUNPOD_VOLUME_PATH}")
+    logger.info(f"Model cache path (HF_HOME): {os.environ.get('HF_HOME')}")
+    logger.info(f"U2Net cache path (U2NET_HOME): {os.environ.get('U2NET_HOME')}")
+else:
+    logger.info("No RunPod Volume mounted; models will be read/cached from local container disk.")
 
 # Constants & Configuration
 NSFW_MODEL_NAME = os.getenv("NSFW_MODEL_NAME", "strangerguardhf/nsfw_image_detection")
