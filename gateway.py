@@ -1,191 +1,139 @@
-import httpx
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
-from fastapi.responses import FileResponse, JSONResponse, Response
-from fastapi.middleware.cors import CORSMiddleware
 import base64
+import hmac
+import io
+import os
 from pathlib import Path
 from uuid import UUID, uuid4
 
-NSFW_URL    = "http://127.0.0.1:5001/analyze"
-THREED_URL  = "http://127.0.0.1:5003/generate"
+import httpx
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response
+from PIL import Image
+
+NSFW_URL = "http://127.0.0.1:5001/analyze"
+THREED_URL = "http://127.0.0.1:5003/generate"
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
+MAX_IMAGE_BYTES = 6 * 1024 * 1024
+MAX_IMAGE_PIXELS = 16_777_216
 
-app = FastAPI(title="Gateway", version="1.3")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+async def require_api_key(request: Request):
+    if request.url.path == "/health":
+        return
+    key = os.getenv("GATEWAY_API_KEY")
+    if not key:
+        raise HTTPException(503, "Set GATEWAY_API_KEY before using the gateway")
+    authorization = request.headers.get("authorization", "")
+    if not hmac.compare_digest(authorization.encode(), f"Bearer {key}".encode()):
+        raise HTTPException(401, "Invalid gateway credentials")
+
+
+app = FastAPI(title="Gateway", version="1.4", dependencies=[Depends(require_api_key)])
+
 
 @app.get("/health")
-async def health(): return {"ok": True}
+async def health():
+    return {"ok": True}
+
+
+async def read_image(image: UploadFile):
+    if image.content_type not in {"image/jpeg", "image/png"}:
+        raise HTTPException(415, "Image must be JPEG or PNG")
+    data = await image.read(MAX_IMAGE_BYTES + 1)
+    if not data:
+        raise HTTPException(400, "Image is empty")
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(413, "Image exceeds the 6 MiB limit")
+    try:
+        with Image.open(io.BytesIO(data)) as decoded:
+            if decoded.format not in {"JPEG", "PNG"}:
+                raise ValueError("Unsupported image format")
+            if decoded.width * decoded.height > MAX_IMAGE_PIXELS:
+                raise ValueError("Image exceeds the 16 megapixel limit")
+            decoded.verify()
+    except Exception as exc:
+        raise HTTPException(400, "Invalid image or image exceeds 16 megapixels") from exc
+    return data
 
 
 async def _post_json(client: httpx.AsyncClient, url: str, service: str, **kwargs):
     try:
         response = await client.post(url, **kwargs)
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+        if (not isinstance(result, dict) or result.get("ok") is not True
+                or type(result.get("is_nsfw")) is not bool):
+            raise ValueError("Invalid moderation response")
+        return result
     except (httpx.HTTPError, ValueError) as exc:
-        raise HTTPException(502, f"{service} service error: {exc}") from exc
+        raise HTTPException(502, f"{service} service returned an invalid response") from exc
 
-# ---------- NSFW ----------
+
 @app.post("/analyze")
 async def analyze(image: UploadFile = File(...)):
-    data = await image.read()
-    files = {"image": (image.filename, data, image.content_type)}
+    data = await read_image(image)
     async with httpx.AsyncClient(timeout=60.0) as client:
+        result = await _post_json(client, NSFW_URL, "NSFW", files={
+            "image": (image.filename or "image.png", data, image.content_type),
+        })
+    return JSONResponse(result)
+
+
+async def generate_checked(image, texture_image):
+    """Both public generation routes use the same validation and moderation."""
+    image_bytes = await read_image(image)
+    has_texture = texture_image is not None
+    texture_bytes = await read_image(texture_image) if has_texture else image_bytes
+    async with httpx.AsyncClient(timeout=1200.0) as client:
+        results = []
+        sources = [(image, image_bytes, "moderation")]
+        if has_texture:
+            sources.append((texture_image, texture_bytes, "texture_moderation"))
+        for upload, data, stage in sources:
+            result = await _post_json(client, NSFW_URL, "NSFW", files={
+                "image": (upload.filename or "image.png", data, upload.content_type),
+            })
+            if result["is_nsfw"]:
+                raise HTTPException(400, {"stage": stage, "error": "Image violates NSFW policy", "details": result})
+            results.append(result)
         try:
-            r = await client.post(NSFW_URL, files=files)
-        except Exception as e:
-            raise HTTPException(502, f"NSFW service error: {e}")
-    return JSONResponse(r.json(), status_code=r.status_code)
+            response = await client.post(THREED_URL, json={
+                "image": base64.b64encode(image_bytes).decode(),
+                "texture_image": base64.b64encode(texture_bytes).decode(),
+                "texture": True,
+                "texture_resolution": 2048,
+                "bake_exp": 4,
+            })
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, "3D service failed") from exc
+    glb = response.content
+    if (len(glb) < 12 or glb[:4] != b"glTF" or int.from_bytes(glb[4:8], "little") != 2
+            or int.from_bytes(glb[8:12], "little") != len(glb)):
+        raise HTTPException(502, "3D service returned an invalid GLB")
+    return glb, results[0], results[-1]
 
 
-
-# ---------- 3D ----------
 @app.post("/generate3d")
-async def generate3d(
-    image: UploadFile = File(...),
-    texture_image: UploadFile | None = None,
-):
-    raw = await image.read()
-    if texture_image is not None and hasattr(texture_image, "read"):
-        texture_raw = await texture_image.read()
-    else:
-        texture_raw = raw
-    
-    # 1. Chuyển sang Base64
-    base64_str = base64.b64encode(raw).decode("utf-8")
-    texture_base64_str = base64.b64encode(texture_raw).decode("utf-8") if texture_raw else base64_str
-    
-    # 2. Đóng gói JSON
-    payload = {
-        "image": base64_str,
-        "texture_image": texture_base64_str,
-        "texture": True,
-        "texture_resolution": 2048,
-        "texture_subfolder": "hunyuan3d-paint-v2-0",
-        "bake_exp": 4,
-    }
-
-    async with httpx.AsyncClient(timeout=1200.0) as client: # Tăng timeout lên 1200s (20 phút)
-        try:
-            r = await client.post(THREED_URL, json=payload)
-        except Exception as e:
-            raise HTTPException(502, f"3D service error: {e}")
-            
-    if r.status_code != 200:
-        print(f"Service 3D Error: {r.text}") 
-        raise HTTPException(status_code=r.status_code, detail=r.text)
-        
-    # --- ĐOẠN SỬA LỖI Ở ĐÂY ---
-    # Dùng Response thay vì StreamingResponse vì r.content đã là bytes hoàn chỉnh
-    return Response(
-        content=r.content, 
-        media_type="model/gltf-binary",
-        headers={"Content-Disposition": 'inline; filename="model.glb"'}
-    )
-
-
+async def generate3d(image: UploadFile = File(...), texture_image: UploadFile | None = None):
+    glb, _, _ = await generate_checked(image, texture_image)
+    return Response(content=glb, media_type="model/gltf-binary",
+                    headers={"Content-Disposition": 'inline; filename="model.glb"'})
 
 
 @app.post("/pipeline/process-all")
-async def process_all_pipeline(
-    image: UploadFile = File(...),
-    texture_image: UploadFile | None = None,
-):
-    """Run safety checks, then textured 3D generation using a single image (or optional texture override)."""
-    image_bytes = await image.read()
-    if not image_bytes:
-        raise HTTPException(400, "Image is empty")
-    if image.content_type not in {"image/jpeg", "image/png"}:
-        raise HTTPException(415, "Image must be JPEG or PNG")
-    if len(image_bytes) > 20 * 1024 * 1024:
-        raise HTTPException(413, "Image exceeds the 20 MB limit")
-
-    has_separate_texture = texture_image is not None and hasattr(texture_image, "read")
-    if has_separate_texture:
-        texture_image_bytes = await texture_image.read()
-        if not texture_image_bytes:
-            raise HTTPException(400, "Texture image is empty")
-        if texture_image.content_type not in {"image/jpeg", "image/png"}:
-            raise HTTPException(415, "Texture image must be JPEG or PNG")
-        if len(texture_image_bytes) > 20 * 1024 * 1024:
-            raise HTTPException(413, "Texture image exceeds the 20 MB limit")
-    else:
-        texture_image_bytes = image_bytes
-
-    files = {
-        "image": (
-            image.filename or "image.png",
-            image_bytes,
-            image.content_type or "application/octet-stream",
-        )
-    }
-
-    async with httpx.AsyncClient(timeout=1200.0) as client:
-        moderation = await _post_json(client, NSFW_URL, "NSFW", files=files)
-        if moderation.get("is_nsfw", False):
-            raise HTTPException(
-                400,
-                {"stage": "moderation", "error": "Image violates NSFW policy", "details": moderation},
-            )
-
-        if has_separate_texture:
-            texture_files = {
-                "image": (
-                    texture_image.filename or "texture.png",
-                    texture_image_bytes,
-                    texture_image.content_type or "application/octet-stream",
-                )
-            }
-            texture_moderation = await _post_json(client, NSFW_URL, "NSFW", files=texture_files)
-            if texture_moderation.get("is_nsfw", False):
-                raise HTTPException(
-                    400,
-                    {
-                        "stage": "texture_moderation",
-                        "error": "Texture image violates NSFW policy",
-                        "details": texture_moderation,
-                    },
-                )
-        else:
-            texture_moderation = moderation
-
-        try:
-            model_response = await client.post(
-                THREED_URL,
-                json={
-                    "image": base64.b64encode(image_bytes).decode("utf-8"),
-                    "texture_image": base64.b64encode(texture_image_bytes).decode("utf-8"),
-                    "texture": True,
-                    "texture_resolution": 2048,
-                    "texture_subfolder": "hunyuan3d-paint-v2-0",
-                    "bake_exp": 4,
-                },
-            )
-            model_response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise HTTPException(502, f"3D service error: {exc}") from exc
-
+async def process_all_pipeline(image: UploadFile = File(...), texture_image: UploadFile | None = None):
+    glb, moderation, texture_moderation = await generate_checked(image, texture_image)
     task_id = uuid4()
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    (OUTPUT_DIR / f"{task_id}.glb").write_bytes(model_response.content)
-
+    (OUTPUT_DIR / f"{task_id}.glb").write_bytes(glb)
     return {
         "ok": True,
         "task_id": str(task_id),
         "results": {
             "moderation": moderation,
             "texture_moderation": texture_moderation,
-            "model_3d": {
-                "status": "success",
-                "glb_url": f"/pipeline/result/{task_id}.glb",
-            },
+            "model_3d": {"status": "success", "glb_url": f"/pipeline/result/{task_id}.glb"},
         },
     }
 

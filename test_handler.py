@@ -12,7 +12,7 @@ import hashlib
 import io
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from PIL import Image
 
@@ -375,7 +375,9 @@ class TestRunpodHandler(unittest.TestCase):
 
         stages = [e["stage"] for e in events if e.get("type") == "progress"]
         self.assertIn("texture_generation", stages)
-        mock_load_hunyuan.assert_called_once_with(load_texture=True)
+        mock_load_hunyuan.assert_called_once_with(
+            load_texture=True, texture_subfolder=runpod_handler.HUNYUAN_TEX_SUBFOLDER,
+        )
         mock_move.assert_called_once()
         mock_offload.assert_called_once()
         mock_tex_pipe.assert_called_once()
@@ -434,14 +436,15 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertEqual(meta_event["name"], "model.glb")
         self.assertEqual(meta_event["size"], len(fake_glb_bytes))
 
+    @patch.object(runpod_handler, "HUNYUAN_USE_FLASHVDM", False)
     @patch.object(runpod_handler.model_manager, "load_hunyuan")
     def test_handler_generate3d_complete_failure_yields_error_event(
         self, mock_load_hunyuan
     ):
-        """Test that if both FlashVDM and fallback fail, an error event is yielded."""
+        """Standard decoding runs once and preserves the reason for a failure."""
         mock_rembg = MagicMock(return_value=Image.new("RGB", (64, 64)))
         mock_shape_pipe = MagicMock()
-        mock_shape_pipe.side_effect = [[None], [None]]
+        mock_shape_pipe.side_effect = [[None], RuntimeError("out of memory")]
 
         mock_load_hunyuan.return_value = {
             "rembg": mock_rembg,
@@ -466,11 +469,12 @@ class TestRunpodHandler(unittest.TestCase):
                 }
             }
             events = list(handler(job))
-
-        error_events = [e for e in events if e.get("type") == "error"]
-        self.assertEqual(len(error_events), 1)
-        self.assertEqual(error_events[0]["stage"], "execution")
-        self.assertIn("Hunyuan3D shape generation returned empty mesh", error_events[0]["error"])
+            mock_shape_pipe.assert_called_once()
+            self.assertIn("empty mesh", events[-1]["error"])
+            events = list(handler(job))
+            self.assertEqual(mock_shape_pipe.call_count, 2)
+            self.assertEqual(events[-1]["stage"], "execution")
+            self.assertEqual(events[-1]["error"], "out of memory")
 
     @patch.object(runpod_handler.model_manager, "load_hunyuan")
     def test_handler_generate3d_texture_error_is_reported(
@@ -544,6 +548,42 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertIn('cross_attention_kwargs.pop("position_attn_mask"', unet_source)
         self.assertNotIn("position_voxel_indices", unet_source)
 
+    def test_paint_options_follow_each_request(self):
+        from importlib.util import module_from_spec, spec_from_file_location
+
+        root = Path(__file__).parent / "3d_generative/Hunyuan3D-2-main/hy3dgen/texgen"
+        def load(name, path, dependencies):
+            spec = spec_from_file_location("hy3dgen.texgen." + name, root / path)
+            module = module_from_spec(spec)
+            with patch.dict("sys.modules", {dep: MagicMock() for dep in dependencies}):
+                spec.loader.exec_module(module)
+            return module
+
+        mv = load("utils.multiview_utils", "utils/multiview_utils.py", [
+            "diffusers", "hy3dgen.texgen.hunyuanpaint.unet.modules",
+        ])
+        net = mv.Multiview_Diffusion_Net.__new__(mv.Multiview_Diffusion_Net)
+        net.device = "cpu"
+        net.view_size = 8
+        net.pipeline = MagicMock(device="cpu")
+        image = Image.new("RGB", (8, 8))
+        for count in (1, 2, 6):
+            net([image] * count, [image, image], [0])
+            self.assertEqual(net.pipeline.call_args.kwargs["camera_info_ref"], [[0] * count])
+
+        paint = load("pipelines", "pipelines.py", ["hy3dgen.texgen." + name for name in (
+            "differentiable_renderer.mesh_render", "utils.dehighlight_utils",
+            "utils.multiview_utils", "utils.imagesuper_utils", "utils.uv_warp_utils",
+        )])
+        config = paint.Hunyuan3DTexGenConfig("", "", "hunyuan3d-paint-v2-0", enable_delight=False)
+        pipeline = paint.Hunyuan3DPaintPipeline(config)
+        paint.mesh_uv_wrap.side_effect = RuntimeError("reached UV stage")
+        for flag, calls in [(None, 0), (True, 1), (None, 1), (True, 2)]:
+            with self.assertRaisesRegex(RuntimeError, "reached UV stage"):
+                pipeline(None, image, enable_delight=flag)
+            self.assertEqual(paint.Light_Shadow_Remover.return_value.call_count, calls)
+        paint.Light_Shadow_Remover.assert_called_once_with(config)
+
     def test_paint_pipeline_device_matching(self):
         """Ensure texture pipeline aligns tensor devices and verifies file sizes."""
         root = Path(__file__).parent / "3d_generative/Hunyuan3D-2-main/hy3dgen/texgen"
@@ -578,6 +618,152 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertIn("HUNYUAN_ENABLE_DELIGHT", handler_source)
         self.assertIn("numpy.full((rgba.size[1], rgba.size[0], 3), 127", paint_source)
         self.assertIn("mode='RGBA'", delight_source)
+
+
+class TestInputSafety(unittest.TestCase):
+    def setUp(self):
+        self.input = {"action": "pipeline", "image": create_dummy_image_b64()}
+
+    def test_rejects_resource_limits_and_ambiguous_inputs_before_loading_models(self):
+        invalid = [
+            {"texture": "false"}, {"enable_delight": 1}, {"num_inference_steps": 1000},
+            {"face_count": -1}, {"seed": True}, {"octree_resolution": 1024},
+            {"texture_resolution": 4096}, {"texture_size": 0},
+            {"guidance_scale": float("nan")}, {"guidance_scale": float("inf")},
+            {"guidance_scale": 10**1000},
+            {"texture_images": []}, {"texture_images": ["x"] * 7},
+            {"texture_images": "not-a-list"}, {"texture_images": [None]},
+            {"texture_image": ""}, {"texture_image": "x", "texture_images": ["y"]},
+            {"image_base64": "different"}, {"texture_subfolder": "../other"},
+            {"unknown": 123},
+        ]
+        with patch.object(runpod_handler.model_manager, "load_hunyuan") as load:
+            for fields in invalid:
+                with self.subTest(fields=fields):
+                    events = list(handler({"input": {**self.input, **fields}}))
+                    self.assertEqual(events[0]["stage"], "validate_input")
+                    self.assertEqual(events[0]["type"], "error")
+            load.assert_not_called()
+
+    def test_aliases_and_total_encoded_payload(self):
+        data = runpod_handler.validate_input({**self.input, "texture_size": 1024, "texture": False})
+        self.assertEqual(data["texture_resolution"], 1024)
+        self.assertFalse(data["texture"])
+        self.assertNotIn("image", data)
+        with patch.object(runpod_handler, "MAX_INPUT_BYTES", 250):
+            with self.assertRaises(ValueError):
+                runpod_handler.validate_input({**self.input, "texture_images": [self.input["image"]] * 3})
+
+    def test_image_size_pixels_and_strict_base64(self):
+        with patch.object(runpod_handler, "MAX_IMAGE_SIZE_BYTES", 4):
+            with self.assertRaises(ValueError):
+                decode_base64_image(self.input["image"])
+        with patch.object(runpod_handler, "MAX_IMAGE_PIXELS", 32):
+            with self.assertRaises(ValueError):
+                decode_base64_image(self.input["image"])
+        with self.assertRaises(ValueError):
+            decode_base64_image(self.input["image"] + "!!!")
+
+    def test_every_multiview_texture_is_moderated_and_block_stops_generation(self):
+        for alias in ("texture_images", "texture_images_base64"):
+            with self.subTest(alias=alias), patch.object(runpod_handler, "handle_analyze") as analyze, \
+                    patch.object(runpod_handler, "handle_generate3d") as generate:
+                analyze.side_effect = [iter([{"type": "result", "data": {"is_nsfw": value}}])
+                                       for value in (False, False, True)]
+                events = list(handler({"input": {**self.input, alias: ["safe", "blocked"]}}))
+                self.assertEqual(analyze.call_count, 3)
+                self.assertEqual(analyze.call_args.args[0]["image_base64"], "blocked")
+                self.assertEqual(events[-1]["stage"], "texture_moderation")
+                self.assertEqual(events[-1]["image_index"], 1)
+                generate.assert_not_called()
+
+    def test_malformed_moderation_fails_closed(self):
+        with patch.object(runpod_handler, "handle_analyze", return_value=iter([
+            {"type": "result", "data": {"ok": True}},
+        ])), patch.object(runpod_handler, "handle_generate3d") as generate:
+            events = list(handler({"input": self.input}))
+            self.assertEqual(events[-1]["type"], "error")
+            generate.assert_not_called()
+
+    def test_selected_texture_checkpoint_reaches_loader(self):
+        manager = runpod_handler.ModelManager()
+        with patch.object(manager, "load_shape_pipeline", return_value=(None, None)), \
+                patch.object(manager, "load_tex_pipeline") as load:
+            manager.load_hunyuan(texture_subfolder="hunyuan3d-paint-v2-0-turbo")
+            load.assert_called_once_with(subfolder="hunyuan3d-paint-v2-0-turbo")
+
+    def test_preload_failure_stops_startup(self):
+        rembg = MagicMock()
+        rembg.BackgroundRemover.side_effect = RuntimeError("download failed")
+        with patch.dict("sys.modules", {"hy3dgen": MagicMock(), "hy3dgen.rembg": rembg}), \
+                patch.object(preload_models, "preload_shape_checkpoint"):
+            with self.assertRaisesRegex(RuntimeError, "BackgroundRemover"):
+                preload_models.preload()
+
+    def test_preload_uses_configured_texture_checkpoint(self):
+        import os
+        texgen = MagicMock()
+        with patch.dict("sys.modules", {"hy3dgen": MagicMock(), "hy3dgen.rembg": MagicMock(),
+                                        "hy3dgen.texgen": texgen}), \
+                patch.object(preload_models, "preload_shape_checkpoint"), \
+                patch.dict(os.environ, {"HUNYUAN_TEX_MODEL": "test/model",
+                                        "HUNYUAN_TEX_SUBFOLDER": "hunyuan3d-paint-v2-0-turbo"}):
+            preload_models.preload(full_texture=True)
+        texgen.Hunyuan3DPaintPipeline.from_pretrained.assert_called_once_with(
+            "test/model", subfolder="hunyuan3d-paint-v2-0-turbo",
+        )
+
+    def test_closing_shape_generator_offloads_pipeline(self):
+        shape = MagicMock()
+        with patch.dict("sys.modules", {"hy3dgen": MagicMock(), "hy3dgen.shapegen": MagicMock()}), \
+                patch.object(runpod_handler.model_manager, "load_hunyuan", return_value={
+                    "rembg": lambda image: image, "shape_pipeline": shape,
+                }):
+            generator = handler({"input": {**self.input, "action": "generate3d", "texture": False}})
+            for event in generator:
+                if event.get("stage") == "shape_generation":
+                    break
+            shape.to.reset_mock()
+            generator.close()
+            shape.to.assert_called_once_with("cpu")
+
+
+class TestLocalTextureFailure(unittest.TestCase):
+    def test_local_worker_does_not_export_missing_or_untextured_paint(self):
+        # Extract only the existing method so this regression needs no CUDA/model imports.
+        import ast
+        import types
+        source = Path(__file__).parent / "3d_generative/Hunyuan3D-2-main/api_server.py"
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        worker = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "ModelWorker")
+        method = next(node for node in worker.body if isinstance(node, ast.FunctionDef) and node.name == "_generate")
+        method.decorator_list = []
+        mesh = MagicMock()
+        mesh.visual.kind = "vertex"
+        scope = {"base64": base64, "BytesIO": io.BytesIO, "trimesh": MagicMock(),
+                 "FloaterRemover": lambda: lambda mesh: mesh,
+                 "DegenerateFaceRemover": lambda: lambda mesh: mesh,
+                 "FaceReducer": lambda: lambda mesh, **kwargs: mesh,
+                 "load_image_from_base64": lambda image: image, "torch": MagicMock()}
+        scope["trimesh"].load.return_value = mesh
+        exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec"), scope)
+        for paint in (None, MagicMock(return_value=mesh)):
+            with self.subTest(paint=paint):
+                instance = types.SimpleNamespace(rembg=lambda image: image, pipeline_tex=paint, device="cpu")
+                with self.assertRaisesRegex(RuntimeError, "[Tt]exture"):
+                    scope["_generate"](instance, "test", {"image": "image", "mesh": "eA==", "texture": True})
+        mesh.export.assert_not_called()
+
+
+class TestRunpodSDK(unittest.IsolatedAsyncioTestCase):
+    async def test_sdk_sends_error_instead_of_success_for_handler_error_event(self):
+        from runpod.serverless.modules import rp_job
+        with patch.object(rp_job, "send_result", new_callable=AsyncMock) as send, \
+                patch.object(rp_job, "stream_result", new_callable=AsyncMock):
+            result = await rp_job.handle_job(None, {"handler": handler}, {"id": "test", "input": {}})
+        self.assertIn("error", result)
+        self.assertNotIn("output", result)
+        self.assertEqual(send.call_args.args[1], result)
 
 
 if __name__ == "__main__":

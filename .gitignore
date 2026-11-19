@@ -16,3 +16,7 @@ __pycache__/
 
 .env
 outputs/
+
+# Local CPU regression environment
+.venv-test/
+.pytest_cache/

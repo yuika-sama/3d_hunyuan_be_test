@@ -98,7 +98,7 @@ class Multiview_Diffusion_Net():
         position_image = [[control_images[i + num_view] for i in range(num_view)]]
 
         camera_info_gen = [camera_info]
-        camera_info_ref = [[0]]
+        camera_info_ref = [[0] * len(input_images)]
         kwargs['width'] = self.view_size
         kwargs['height'] = self.view_size
         kwargs['num_in_batch'] = num_view

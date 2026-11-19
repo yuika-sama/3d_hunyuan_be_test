@@ -270,8 +270,8 @@ class Hunyuan3DPaintPipeline:
                 self.render.set_default_texture_resolution(texture_size)
         if bake_exp is not None:
             self.config.bake_exp = bake_exp
-        if enable_delight is not None:
-            self.config.enable_delight = enable_delight
+        if enable_delight is None:
+            enable_delight = self.config.enable_delight
 
         device = getattr(self, 'device', 'cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -296,7 +296,9 @@ class Hunyuan3DPaintPipeline:
                 torch.cuda.empty_cache()
 
         # Stage 1: Delight / Shadow removal (Sequential VRAM management)
-        if getattr(self.config, 'enable_delight', False) and self.models.get('delight_model') is not None:
+        if enable_delight:
+            if self.models.get('delight_model') is None:
+                self.models['delight_model'] = Light_Shadow_Remover(self.config)
             try:
                 if hasattr(self.models['delight_model'], 'to'):
                     self.models['delight_model'].to(device)

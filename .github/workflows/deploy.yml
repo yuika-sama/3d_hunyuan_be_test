@@ -31,12 +31,12 @@ jobs:
       - name: Install Test Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-          pip install numpy pillow httpx runpod pytest fastapi python-multipart
+          pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install "numpy<2" pillow httpx runpod==2.3.0 pytest fastapi python-multipart
 
       - name: Run Pytest
         run: |
-          python -m pytest test_handler.py test_gateway.py -v
+          python -m pytest test_handler.py test_gateway.py test_runpod_smoke.py -v
 
   build-and-push:
     name: Build & Push Docker Image to GHCR
@@ -99,83 +99,37 @@ jobs:
           cache-to: type=gha,mode=min
 
   deploy-runpod:
-    name: Update Runpod & Smoke Test
+    name: Update Runpod & Analysis Smoke Test
+    timeout-minutes: 40
     needs: [build-and-push]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: python -m pip install httpx
       - name: Deploy to Runpod Serverless
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-          RUNPOD_TEMPLATE_ID: ${{ vars.RUNPOD_TEMPLATE_ID }}
           RUNPOD_ENDPOINT_ID: ${{ vars.RUNPOD_ENDPOINT_ID }}
           NEW_IMAGE: ${{ needs.build-and-push.outputs.image_tag }}
         run: |
-          if [ -z "$RUNPOD_API_KEY" ]; then
-            echo "::warning ::RUNPOD_API_KEY is not configured. Skipping automated Runpod update."
-            echo "The image has been pushed to: $NEW_IMAGE"
+          if [ -z "$RUNPOD_API_KEY" ] || [ -z "$RUNPOD_ENDPOINT_ID" ]; then
+            echo "::warning ::Set RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID to deploy. Image pushed to GHCR: $NEW_IMAGE."
             exit 0
           fi
 
-          if [ -n "$RUNPOD_TEMPLATE_ID" ]; then
-            echo "Updating via Template ID: ${RUNPOD_TEMPLATE_ID}..."
-            UPDATE_RES=$(curl -s -w "\n%{http_code}" -X PATCH "https://rest.runpod.io/v1/templates/${RUNPOD_TEMPLATE_ID}" \
-              -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
-              -H "Content-Type: application/json" \
-              -d "{\"imageName\": \"${NEW_IMAGE}\"}")
-            
-            HTTP_CODE=$(echo "$UPDATE_RES" | tail -n1)
-            BODY=$(echo "$UPDATE_RES" | sed '$d')
-            if [ "$HTTP_CODE" -ne 200 ] && [ "$HTTP_CODE" -ne 204 ]; then
-              echo "::warning ::Template update returned HTTP $HTTP_CODE: $BODY"
-            else
-              echo "Template successfully updated to $NEW_IMAGE."
-            fi
-          elif [ -n "$RUNPOD_ENDPOINT_ID" ]; then
-            echo "Updating Endpoint directly: ${RUNPOD_ENDPOINT_ID}..."
-            UPDATE_RES=$(curl -s -w "\n%{http_code}" -X PATCH "https://rest.runpod.io/v1/endpoints/${RUNPOD_ENDPOINT_ID}" \
-              -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
-              -H "Content-Type: application/json" \
-              -d "{\"imageName\": \"${NEW_IMAGE}\"}")
-
-            HTTP_CODE=$(echo "$UPDATE_RES" | tail -n1)
-            BODY=$(echo "$UPDATE_RES" | sed '$d')
-            if [ "$HTTP_CODE" -ne 200 ] && [ "$HTTP_CODE" -ne 204 ]; then
-              echo "Trying GraphQL mutation fallback for endpoint update..."
-              GQL_PAYLOAD="{\"query\":\"mutation { saveEndpoint(input: { id: \\\"${RUNPOD_ENDPOINT_ID}\\\", imageName: \\\"${NEW_IMAGE}\\\" }) { id imageName } }\"}"
-              GQL_RES=$(curl -s -X POST "https://api.runpod.io/graphql?api_key=${RUNPOD_API_KEY}" \
-                -H "Content-Type: application/json" \
-                -d "$GQL_PAYLOAD")
-              echo "GraphQL response: $GQL_RES"
-            else
-              echo "Endpoint successfully updated to $NEW_IMAGE."
-            fi
-          else
-            echo "::warning ::Neither RUNPOD_TEMPLATE_ID nor RUNPOD_ENDPOINT_ID was set. Image pushed to GHCR: $NEW_IMAGE."
-            exit 0
+          HTTP_CODE=$(curl --connect-timeout 10 --max-time 60 --silent --show-error \
+            --output /dev/null --write-out "%{http_code}" \
+            -X PATCH "https://api.runpod.io/v2/serverless/$RUNPOD_ENDPOINT_ID" \
+            -H "Authorization: Bearer $RUNPOD_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"image\": \"$NEW_IMAGE\"}")
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error ::Runpod endpoint update failed with HTTP $HTTP_CODE"
+            exit 1
           fi
 
-          if [ -n "$RUNPOD_ENDPOINT_ID" ]; then
-            echo "Waiting for worker to pull new image and initialize..."
-            DUMMY_PNG="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-            SMOKE_PAYLOAD="{\"input\": {\"action\": \"analyze\", \"image_base64\": \"$DUMMY_PNG\"}}"
-
-            TEST_PASSED=false
-            for i in $(seq 1 5); do
-              echo "Smoke test attempt $i/5 (waiting 15s)..."
-              sleep 15
-              TEST_RES=$(curl -s -X POST "https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}/runsync" \
-                -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
-                -H "Content-Type: application/json" \
-                -d "$SMOKE_PAYLOAD" || true)
-              echo "Response: $TEST_RES"
-              if echo "$TEST_RES" | grep -q '"status":\s*"COMPLETED"'; then
-                echo "Smoke test passed successfully on attempt $i!"
-                TEST_PASSED=true
-                break
-              fi
-            done
-
-            if [ "$TEST_PASSED" != "true" ]; then
-              echo "::warning ::Worker did not complete smoke test within timeout (likely cold start / image download in progress). Please verify in Runpod dashboard."
-            fi
-          fi
+          echo "Endpoint image updated to $NEW_IMAGE."
+          python runpod_smoke.py 3d_generative/Hunyuan3D-2-main/assets/example_images/004.png --action analyze

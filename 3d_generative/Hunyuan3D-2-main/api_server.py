@@ -156,6 +156,7 @@ class ModelWorker:
                  tex_subfolder=None,
                  device='cuda',
                  enable_tex=False):
+        self._generation_lock = threading.Lock()
         self.model_path = model_path
         self.worker_id = worker_id
         self.device = device # Lưu lại là 'cuda' để dùng sau này
@@ -205,8 +206,12 @@ class ModelWorker:
             "queue_length": self.get_queue_length(),
         }
 
-    @torch.inference_mode()
     def generate(self, uid, params):
+        with self._generation_lock:
+            return self._generate(uid, params)
+
+    @torch.inference_mode()
+    def _generate(self, uid, params):
         # 1. Xử lý đầu vào
         texture_image = None
         if params.get('texture', False) or params.get('do_texture', False):
@@ -284,8 +289,11 @@ class ModelWorker:
                         texture_size=params.get('texture_resolution', params.get('texture_size', None)),
                         bake_exp=params.get('bake_exp', None),
                     )
-                    if textured_mesh is not None:
+                    if (textured_mesh is not None
+                            and getattr(getattr(textured_mesh, 'visual', None), 'kind', None) == 'texture'):
                         mesh = textured_mesh
+                    else:
+                        raise RuntimeError("Texture pipeline returned a mesh without texture data.")
                     print(">>> [Texture] Offloading Paint pipeline to CPU...")
                 except Exception as e:
                     print(f"ERROR Texture Process: {e}")
@@ -294,7 +302,7 @@ class ModelWorker:
                     self.pipeline_tex.to("cpu")
                     torch.cuda.empty_cache()
             else:
-                logger.warning("pipeline_tex is not loaded, returning untextured mesh.")
+                raise RuntimeError("Texture pipeline is unavailable; refusing to return an untextured model.")
 
         # 4. Lưu file và trả về
         type = params.get('type', 'glb')
@@ -378,16 +386,18 @@ async def status(uid: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", type=str, default="0.0.0.0")
+    parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8081)
     parser.add_argument("--model_path", type=str, default='tencent/Hunyuan3D-2mini')
     parser.add_argument("--tex_model_path", type=str, default='tencent/Hunyuan3D-2')
     parser.add_argument("--subfolder", type=str, default='hunyuan3d-dit-v2-mini-turbo')
     parser.add_argument("--tex_subfolder", type=str, default=os.getenv('HUNYUAN_TEX_SUBFOLDER', 'hunyuan3d-paint-v2-0'))
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--limit-model-concurrency", type=int, default=5)
+    parser.add_argument("--limit-model-concurrency", type=int, default=1)
     parser.add_argument('--enable_tex', action='store_true')
     args = parser.parse_args()
+    if args.limit_model_concurrency != 1:
+        parser.error("CPU/GPU offloading requires --limit-model-concurrency=1")
     logger.info(f"args: {args}")
 
     model_semaphore = asyncio.Semaphore(args.limit_model_concurrency)

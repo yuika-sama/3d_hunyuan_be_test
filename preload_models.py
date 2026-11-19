@@ -65,6 +65,7 @@ def preload_shape_checkpoint():
 
 
 def preload(full_texture: bool = False):
+    failures = []
     print("=" * 60)
     print(f" [PRELOAD] Starting model preload (full_texture={full_texture})...")
     print("=" * 60)
@@ -76,6 +77,7 @@ def preload(full_texture: bool = False):
         print("[PRELOAD] BackgroundRemover ready.")
     except Exception as e:
         print(f"[PRELOAD WARNING] BackgroundRemover failed: {e}")
+        failures.append("BackgroundRemover")
 
     print("[PRELOAD] 2/3 Checking / downloading Hunyuan3D shape model...")
     try:
@@ -83,19 +85,26 @@ def preload(full_texture: bool = False):
         print("[PRELOAD] Hunyuan3D shape model ready.")
     except Exception as e:
         print(f"[PRELOAD WARNING] Hunyuan3D shape model failed: {e}")
+        failures.append("shape")
 
     if full_texture:
         print("[PRELOAD] 3/3 Checking / downloading Hunyuan3D texture model...")
         try:
             from hy3dgen.texgen import Hunyuan3DPaintPipeline
-            tex_pipeline = Hunyuan3DPaintPipeline.from_pretrained("tencent/Hunyuan3D-2")
+            tex_pipeline = Hunyuan3DPaintPipeline.from_pretrained(
+                os.getenv("HUNYUAN_TEX_MODEL", "tencent/Hunyuan3D-2"),
+                subfolder=os.getenv("HUNYUAN_TEX_SUBFOLDER", "hunyuan3d-paint-v2-0"),
+            )
             tex_pipeline.to("cpu")
             print("[PRELOAD] Hunyuan3D texture model ready.")
         except Exception as e:
             print(f"[PRELOAD WARNING] Hunyuan3D texture model failed during preload: {e}")
             import traceback
             traceback.print_exc()
-            print("[PRELOAD WARNING] Continuing container startup so worker can handle requests...")
+            failures.append("texture")
+
+    if failures:
+        raise RuntimeError(f"Model preload failed: {', '.join(failures)}")
 
     print("=" * 60)
     print(" [PRELOAD] Preload process completed.")

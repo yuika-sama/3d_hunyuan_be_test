@@ -33,7 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     zstd \
     && rm -rf /var/lib/apt/lists/* \
-    && rm -rf /usr/local/cuda/targets/x86_64-linux/lib/*_static.a || true
+    && rm -rf /usr/local/cuda/targets/x86_64-linux/lib/*_static.a
 
 # Set python3 alias
 RUN ln -sf /usr/bin/python3.10 /usr/bin/python && \
@@ -44,7 +44,7 @@ WORKDIR /app
 # Upgrade pip & install PyTorch with CUDA 12.1 (using buildkit pip cache mount)
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install --upgrade pip setuptools wheel && \
-    pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+    pip3 install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
 
 # Copy dependency definitions and install Python packages
 COPY requirements-runpod.txt /app/requirements-runpod.txt

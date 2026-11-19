@@ -18,7 +18,9 @@ import base64
 import gc
 import hashlib
 import io
+import json
 import logging
+import math
 import time
 import traceback
 from typing import Any, Dict, Generator, Optional, Tuple
@@ -98,7 +100,10 @@ HUNYUAN_ENABLE_DELIGHT = os.getenv("HUNYUAN_ENABLE_DELIGHT", "0").lower() in ("1
 
 # Chunk size for GLB streaming: 512 KiB raw data per chunk
 CHUNK_SIZE_BYTES = 512 * 1024
-MAX_IMAGE_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB max payload
+MAX_IMAGE_SIZE_BYTES = 6 * 1024 * 1024
+MAX_INPUT_BYTES = 9_500_000  # Leave room for the Runpod /run envelope (10 MB).
+MAX_IMAGE_PIXELS = 16_777_216
+MAX_TEXTURE_IMAGES = 6
 
 NSFW_LABELS = [
     "Anime Picture",
@@ -144,8 +149,10 @@ def decode_base64_image(raw_str: str) -> Tuple[Image.Image, bytes]:
         raw_str = raw_str.split(",", 1)[1]
 
     raw_str = raw_str.strip()
+    if len(raw_str) > 4 * ((MAX_IMAGE_SIZE_BYTES + 2) // 3):
+        raise ValueError("Encoded image exceeds the 6 MiB limit.")
     try:
-        image_bytes = base64.b64decode(raw_str)
+        image_bytes = base64.b64decode(raw_str, validate=True)
     except Exception as e:
         raise ValueError(f"Failed to decode base64 image data: {str(e)}")
 
@@ -159,6 +166,8 @@ def decode_base64_image(raw_str: str) -> Tuple[Image.Image, bytes]:
 
     try:
         pil_img = Image.open(io.BytesIO(image_bytes))
+        if pil_img.width * pil_img.height > MAX_IMAGE_PIXELS:
+            raise ValueError("Image exceeds the 16 megapixel limit.")
         pil_img.verify()  # verify image structure
         # Reopen after verify
         pil_img = Image.open(io.BytesIO(image_bytes))
@@ -168,6 +177,78 @@ def decode_base64_image(raw_str: str) -> Tuple[Image.Image, bytes]:
         raise ValueError(f"Invalid image format or corrupted image: {str(e)}")
 
     return pil_img, image_bytes
+
+
+def texture_sources(job_input):
+    """Use the same image selection for moderation and generation."""
+    multiple = job_input.get("texture_images_base64") or job_input.get("texture_images")
+    if multiple:
+        return multiple
+    single = job_input.get("texture_image_base64") or job_input.get("texture_image")
+    return [single] if single else []
+
+
+def validate_input(job_input):
+    if not isinstance(job_input, dict):
+        raise ValueError("Request 'input' must be a JSON object.")
+    data = dict(job_input)
+    action = data.get("action")
+    if action not in ("analyze", "generate3d", "pipeline"):
+        raise ValueError("Invalid action. Expected: analyze, generate3d, pipeline.")
+    aliases = {
+        "image": "image_base64", "texture_image": "texture_image_base64",
+        "texture_images": "texture_images_base64", "texture_size": "texture_resolution",
+        "subfolder": "texture_subfolder",
+    }
+    for alias, canonical in aliases.items():
+        if alias in data:
+            value = data.pop(alias)
+            if canonical in data and data[canonical] != value:
+                raise ValueError(f"Conflicting fields: {alias} and {canonical}.")
+            data[canonical] = value
+    ranges = {
+        "seed": (0, 2**32 - 1), "octree_resolution": (128, 512),
+        "num_inference_steps": (1, 100), "face_count": (1000, 200000),
+        "texture_resolution": (256, 2048), "bake_exp": (1, 16),
+    }
+    allowed = set(ranges) | {
+        "action", "image_base64", "texture_image_base64", "texture_images_base64",
+        "texture", "guidance_scale", "texture_subfolder", "enable_delight",
+    }
+    if set(data) - allowed:
+        raise ValueError(f"Unknown input fields: {', '.join(sorted(set(data) - allowed))}.")
+    for key, (low, high) in ranges.items():
+        if key in data and (type(data[key]) is not int or not low <= data[key] <= high):
+            raise ValueError(f"{key} must be an integer between {low} and {high}.")
+    if "texture_resolution" in data and data["texture_resolution"] not in (256, 512, 1024, 2048):
+        raise ValueError("texture_resolution must be 256, 512, 1024 or 2048.")
+    for key in ("texture", "enable_delight"):
+        if key in data and type(data[key]) is not bool:
+            raise ValueError(f"{key} must be a JSON boolean.")
+    if "guidance_scale" in data:
+        value = data["guidance_scale"]
+        if type(value) not in (int, float) or not 0 <= value <= 20 or not math.isfinite(value):
+            raise ValueError("guidance_scale must be a finite number between 0 and 20.")
+    if "texture_subfolder" in data and data["texture_subfolder"] not in (
+        "hunyuan3d-paint-v2-0", "hunyuan3d-paint-v2-0-turbo",
+    ):
+        raise ValueError("Unsupported texture_subfolder.")
+    if "texture_images_base64" in data:
+        images = data["texture_images_base64"]
+        if not isinstance(images, list) or not 1 <= len(images) <= MAX_TEXTURE_IMAGES:
+            raise ValueError("texture_images must contain 1 to 6 images.")
+        if "texture_image_base64" in data:
+            raise ValueError("Use either a texture image or a texture image list, not both.")
+    images = [data.get("image_base64"), *texture_sources(data)]
+    if "texture_image_base64" in data:
+        images.append(data["texture_image_base64"])
+    if any(not isinstance(item, str) or not item.strip() for item in images):
+        raise ValueError("Every image must be a non-empty Base64 string.")
+    if any(len(item) > MAX_INPUT_BYTES for item in images):
+        raise ValueError("Encoded image exceeds the request limit.")
+    if len(json.dumps(data, ensure_ascii=True, allow_nan=False).encode("utf-8")) > MAX_INPUT_BYTES:
+        raise ValueError("Input exceeds 9.5 MB; resize images before sending to Runpod.")
+    return data
 
 
 def prepare_shape_image(image: Image.Image, rembg) -> Image.Image:
@@ -294,6 +375,11 @@ class ModelManager:
         if current_tex_pipe is not None and current_subfolder == target_subfolder:
             return current_tex_pipe
 
+        # Release the previous checkpoint before allocating another multi-GB pipeline.
+        self.hunyuan_worker["tex_pipeline"] = None
+        del current_tex_pipe
+        clean_vram()
+
         logger.info(f"Loading texture model {HUNYUAN_TEX_MODEL} (subfolder: {target_subfolder})...")
         from hy3dgen.texgen import Hunyuan3DPaintPipeline
 
@@ -325,10 +411,10 @@ class ModelManager:
 
         return self.hunyuan_worker.get("tex_pipeline")
 
-    def load_hunyuan(self, load_texture: bool = True):
+    def load_hunyuan(self, load_texture: bool = True, texture_subfolder: Optional[str] = None):
         """Load Hunyuan3D pipelines with CPU offloading."""
         rembg, shape_pipeline = self.load_shape_pipeline()
-        tex_pipeline = self.load_tex_pipeline() if load_texture else None
+        tex_pipeline = self.load_tex_pipeline(subfolder=texture_subfolder) if load_texture else None
         return {
             "rembg": rembg,
             "shape_pipeline": shape_pipeline,
@@ -441,18 +527,8 @@ def handle_generate3d(
 
     texture_imgs = []
     if enable_texture:
-        mv_inputs = job_input.get("texture_images_base64") or job_input.get("texture_images")
-        if mv_inputs and isinstance(mv_inputs, list):
-            for t_item in mv_inputs:
-                t_dec, _ = decode_base64_image(t_item)
-                texture_imgs.append(t_dec)
-        else:
-            single_tex = job_input.get("texture_image_base64") or job_input.get("texture_image")
-            if single_tex:
-                t_dec, _ = decode_base64_image(single_tex)
-                texture_imgs.append(t_dec)
-            else:
-                texture_imgs.append(pil_img)
+        sources = texture_sources(job_input)
+        texture_imgs = [decode_base64_image(item)[0] for item in sources] if sources else [pil_img]
 
     logger.info(
         "Shape config: model=%s subfolder=%s decoder=%s seed=%d octree=%d steps=%d guidance=%s faces=%d tex_res=%d bake_exp=%d delight=%s",
@@ -478,7 +554,9 @@ def handle_generate3d(
         "vram": get_vram_info(),
     }
 
-    hunyuan = model_manager.load_hunyuan(load_texture=enable_texture)
+    hunyuan = model_manager.load_hunyuan(
+        load_texture=enable_texture, texture_subfolder=tex_subfolder,
+    )
     rembg = hunyuan["rembg"]
     shape_pipeline = hunyuan["shape_pipeline"]
     tex_pipeline = hunyuan.get("tex_pipeline")
@@ -502,52 +580,18 @@ def handle_generate3d(
     # 2. Shape generation
     t_shape_start = time.time()
     logger.info(f"Moving shape pipeline to {device}...")
-    shape_pipeline.to(device)
-
-    yield {
-        "type": "progress",
-        "stage": "shape_generation",
-        "elapsed_ms": int((time.time() - start_time) * 1000),
-        "vram": get_vram_info(),
-    }
-
-    mesh = None
     try:
-        gen_dev = device if (torch.cuda.is_available() and str(device).startswith("cuda")) else "cpu"
-        generator = torch.Generator(device=gen_dev).manual_seed(seed)
-        outputs = shape_pipeline(
-            image=image_no_bg,
-            generator=generator,
-            octree_resolution=octree_res,
-            num_inference_steps=steps,
-            guidance_scale=guidance,
-        )
-        if outputs and len(outputs) > 0:
-            mesh = outputs[0]
-    except Exception as e:
-        logger.warning(f"Shape generation with FlashVDM encountered an error: {e}")
+        shape_pipeline.to(device)
 
-    def _is_mesh_valid(m) -> bool:
-        if m is None:
-            return False
-        if hasattr(m, "vertices"):
-            v = getattr(m, "vertices")
-            if type(v).__name__ in ("ndarray", "list", "tuple", "Tensor"):
-                if len(v) == 0:
-                    return False
-        if hasattr(m, "faces"):
-            f = getattr(m, "faces")
-            if type(f).__name__ in ("ndarray", "list", "tuple", "Tensor"):
-                if len(f) == 0:
-                    return False
-        return True
+        yield {
+            "type": "progress",
+            "stage": "shape_generation",
+            "elapsed_ms": int((time.time() - start_time) * 1000),
+            "vram": get_vram_info(),
+        }
 
-    # Fallback to standard volume decoding if FlashVDM produced empty mesh or failed
-    if not _is_mesh_valid(mesh):
-        logger.warning("Shape generation returned an empty mesh; retrying once with the standard decoder...")
+        mesh = None
         try:
-            if HUNYUAN_USE_FLASHVDM:
-                shape_pipeline.enable_flashvdm(enabled=False)
             gen_dev = device if (torch.cuda.is_available() and str(device).startswith("cuda")) else "cpu"
             generator = torch.Generator(device=gen_dev).manual_seed(seed)
             outputs = shape_pipeline(
@@ -559,19 +603,52 @@ def handle_generate3d(
             )
             if outputs and len(outputs) > 0:
                 mesh = outputs[0]
-        except Exception as e2:
-            logger.error(f"Fallback shape generation also failed: {e2}")
-        finally:
-            if HUNYUAN_USE_FLASHVDM:
+        except Exception as e:
+            if not HUNYUAN_USE_FLASHVDM:
+                raise
+            logger.warning(f"Shape generation with FlashVDM encountered an error: {e}")
+
+        def _is_mesh_valid(m) -> bool:
+            if m is None:
+                return False
+            if hasattr(m, "vertices"):
+                v = getattr(m, "vertices")
+                if type(v).__name__ in ("ndarray", "list", "tuple", "Tensor"):
+                    if len(v) == 0:
+                        return False
+            if hasattr(m, "faces"):
+                f = getattr(m, "faces")
+                if type(f).__name__ in ("ndarray", "list", "tuple", "Tensor"):
+                    if len(f) == 0:
+                        return False
+            return True
+
+        # Fallback to standard volume decoding if FlashVDM produced empty mesh or failed
+        if HUNYUAN_USE_FLASHVDM and not _is_mesh_valid(mesh):
+            logger.warning("Shape generation returned an empty mesh; retrying once with the standard decoder...")
+            try:
+                shape_pipeline.enable_flashvdm(enabled=False)
+                gen_dev = device if (torch.cuda.is_available() and str(device).startswith("cuda")) else "cpu"
+                generator = torch.Generator(device=gen_dev).manual_seed(seed)
+                outputs = shape_pipeline(
+                    image=image_no_bg,
+                    generator=generator,
+                    octree_resolution=octree_res,
+                    num_inference_steps=steps,
+                    guidance_scale=guidance,
+                )
+                if outputs and len(outputs) > 0:
+                    mesh = outputs[0]
+            finally:
                 try:
                     topk = "merge" if "mini" in HUNYUAN_SHAPE_MODEL.lower() else "mean"
                     shape_pipeline.enable_flashvdm(topk_mode=topk, mc_algo="mc")
                 except Exception:
                     pass
 
-    logger.info("Offloading shape pipeline back to CPU...")
-    shape_pipeline.to("cpu")
-    clean_vram()
+    finally:
+        shape_pipeline.to("cpu")
+        clean_vram()
 
     shape_ms = int((time.time() - t_shape_start) * 1000)
 
@@ -726,7 +803,7 @@ def handle_pipeline(
                 event = {**event, "stage": f"moderation.{event['stage']}"}
             yield event
 
-    if not moderation:
+    if not isinstance(moderation, dict) or type(moderation.get("is_nsfw")) is not bool:
         raise RuntimeError("NSFW stage returned no result.")
     if moderation.get("is_nsfw"):
         yield {
@@ -737,20 +814,17 @@ def handle_pipeline(
         }
         return
 
-    texture_moderation = None
-    if job_input.get("texture_image_base64") or job_input.get("texture_image"):
-        texture_input = {
-            **job_input,
-            "image_base64": job_input.get("texture_image_base64"),
-            "image": job_input.get("texture_image"),
-        }
+    texture_results = []
+    for index, source in enumerate(texture_sources(job_input)):
+        texture_moderation = None
+        texture_input = {"image_base64": source}
         for event in handle_analyze(texture_input, start_time):
             if event.get("type") == "result":
                 texture_moderation = event["data"]
             elif event.get("type") == "progress":
                 yield {**event, "stage": f"texture_moderation.{event['stage']}"}
 
-        if not texture_moderation:
+        if not isinstance(texture_moderation, dict) or type(texture_moderation.get("is_nsfw")) is not bool:
             raise RuntimeError("Texture NSFW stage returned no result.")
         if texture_moderation.get("is_nsfw"):
             yield {
@@ -758,10 +832,13 @@ def handle_pipeline(
                 "stage": "texture_moderation",
                 "error": "Texture image violates NSFW policy.",
                 "data": texture_moderation,
+                "image_index": index,
             }
             return
-    else:
-        texture_moderation = moderation
+        texture_results.append(texture_moderation)
+    if not texture_results:
+        texture_results = [moderation]
+    texture_moderation = texture_results[0] if len(texture_results) == 1 else texture_results
 
     yield {
         "type": "result",
@@ -791,26 +868,18 @@ def handler(job: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
     Parses request input, routes to action handler, and yields stream events.
     """
     start_time = time.time()
-    job_input = job.get("input", {})
-    if not isinstance(job_input, dict):
+    try:
+        job_input = validate_input(job.get("input") if isinstance(job, dict) else None)
+    except (ValueError, TypeError) as exc:
         yield {
             "type": "error",
             "stage": "validate_input",
-            "error": "Request 'input' must be a JSON object.",
+            "error": str(exc),
             "timings": {"total_ms": 0},
         }
         return
 
     action = job_input.get("action")
-    if not action:
-        yield {
-            "type": "error",
-            "stage": "validate_input",
-            "error": "Missing required field 'action' in input. Expected: analyze, generate3d, pipeline.",
-            "timings": {"total_ms": 0},
-        }
-        return
-
     logger.info(f"Starting job with action='{action}'")
 
     try:
@@ -820,13 +889,6 @@ def handler(job: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
             yield from handle_generate3d(job_input, start_time)
         elif action == "pipeline":
             yield from handle_pipeline(job_input, start_time)
-        else:
-            yield {
-                "type": "error",
-                "stage": "validate_input",
-                "error": f"Invalid action '{action}'. Supported actions: analyze, generate3d, pipeline.",
-                "timings": {"total_ms": int((time.time() - start_time) * 1000)},
-            }
     except Exception as e:
         logger.error(f"Error processing action '{action}': {traceback.format_exc()}")
         yield {

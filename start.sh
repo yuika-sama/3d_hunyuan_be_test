@@ -13,7 +13,7 @@ export HF_HUB_DOWNLOAD_TIMEOUT="600"
 # 1. Preload models into local cache before announcing worker ready to Runpod
 if [ "${PRELOAD_MODELS:-1}" = "1" ]; then
     echo "[STARTUP] Pre-downloading / verifying Hunyuan3D models before accepting jobs..."
-    python3 /app/preload_models.py --full || echo "[STARTUP WARNING] Model preloading encountered an issue, proceeding to start worker handler..."
+    python3 /app/preload_models.py --full
 fi
 
 # 2. Start Runpod Serverless Python Worker

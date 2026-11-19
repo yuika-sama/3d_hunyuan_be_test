@@ -1,375 +1,188 @@
-# Kế hoạch triển khai dự án lên Runpod Serverless
+# Triển khai Runpod và bàn giao Bookaria
 
-> Tài liệu này lưu thiết kế triển khai ban đầu. API contract hiện hành và các mặc định shape/mesh mới nằm trong mục **API Reference** của [`README.md`](../README.md#-4-api-reference).
+Cập nhật 18/11/2026. Tài liệu này thay thế kế hoạch cũ còn nhắc các dịch vụ đã bỏ.
+Phạm vi bản sửa: worker, gateway thử nghiệm, tests và quy trình kiểm chứng.
+**Chưa triển khai hoặc nối code vào Bookaria.** Thành viên chạy test GPU sau khi push.
 
-## 1. Mục tiêu và phạm vi
+## 1. Những thay đổi cần biết khi nhận bản sửa
 
-Đưa toàn bộ bốn chức năng hiện tại vào **một Runpod Serverless endpoint**:
+- Chuẩn hóa field/alias, kiểm tra kiểu và giới hạn tài nguyên trước khi load model.
+- Mọi ảnh trong list texture của `pipeline` đều được kiểm duyệt. Response moderation lỗi/
+  thiếu boolean không được xem là an toàn.
+- Override checkpoint paint được truyền đúng vào loader; giải phóng checkpoint cũ trước khi thay.
+- Shape được offload trong `finally`, kể cả đóng generator giữa chừng.
+- Local paint không load hoặc trả model không có texture đều báo lỗi.
+- Gateway kiểm tra ảnh thật, đọc có giới hạn, kiểm duyệt cả hai route sinh GLB và kiểm tra header GLB.
+- Gateway yêu cầu `GATEWAY_API_KEY`; run.bat chỉ mở loopback, không tự chạy ngrok.
+- Local worker khóa việc tạo model để không có hai thread đồng thời di chuyển model CPU/GPU.
+- Preload startup thất bại làm container dừng; build-time preload vẫn best-effort vì build runner
+  có thể không tải được weights. `PRELOAD_MODELS=0` chỉ dành cho chẩn đoán/lazy load.
+- Khóa torch/torchvision/Runpod SDK; chưa phải lockfile đầy đủ cho mọi dependency native.
+- Giữ error-event contract: SDK 2.3.0 nhận `error` và báo job lỗi; đã test qua SDK với HTTP mock.
+- CI không bỏ qua deploy HTTP lỗi và không dùng regex COMPLETED làm bằng chứng inference.
+  Smoke chỉ submit một job rồi đọc kết quả, không tạo năm job khi cold start.
 
-1. Kiểm tra ảnh NSFW.
-2. Sinh mô tả ảnh bằng BLIP.
-3. Sinh/chỉnh mô tả bằng Ollama + LLaVA 7B.
-4. Sinh mô hình 3D bằng Hunyuan3D, giữ nguyên thiết lập chất lượng hiện tại.
+**Thay đổi contract:** input lạ/sai kiểu, ảnh >6 MiB hoặc >16 MP, JSON input >9.5 MB
+nay bị từ chối; gateway cần Bearer key; `/generate3d` gateway nay có kiểm duyệt.
+Worker `generate3d` vẫn là primitive cho backend tin cậy với ảnh đã được kiểm duyệt.
+Giữ `pipeline` cho luồng người dùng.
 
-Các yêu cầu đã chốt:
+## 2. Kiểm tra CPU trước khi push
 
-- Tải thấp: khoảng 10–20 request/ngày.
-- Không cần xử lý đồng thời.
-- Ưu tiên chi phí thấp nhất nhưng không giảm chất lượng đầu ra 3D.
-- File GLB được trả về qua API.
-- Repository GitHub đang private.
-- Docker image lưu trên GHCR.
-- Mỗi commit vào nhánh `main` tự động build và cập nhật Runpod.
-- Frontend chỉ dùng để kiểm thử cục bộ, không được commit lên GitHub.
-- Quy mô đồ án, chưa cần kiến trúc nhiều service hoặc khả năng chịu tải lớn.
+Từ thư mục gốc repo, dùng Python 3.10/3.11:
 
-## 2. Kiến trúc đề xuất
+```powershell
+python -m venv .venv-test
+.\.venv-test\Scripts\python.exe -m pip install --upgrade pip
+.\.venv-test\Scripts\python.exe -m pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+.\.venv-test\Scripts\python.exe -m pip install "numpy<2" pillow httpx runpod==2.3.0 pytest fastapi python-multipart
+.\.venv-test\Scripts\python.exe -m pytest test_handler.py test_gateway.py test_runpod_smoke.py -v
+git diff --check
+git status --short
+```
 
-Sử dụng một Docker image và một Runpod queue-based Serverless worker. Không tiếp tục chạy năm HTTP server nội bộ như cách chạy local hiện tại.
+Linux: tạo venv tương tự, thay đường dẫn Python bằng `.venv-test/bin/python`.
+Không cài requirements-runpod.txt trên máy chỉ chạy unit test: file đó gồm CUDA/native/model stack.
+Test mock kiểm tra routing, NSFW, decode, checkpoint, offload, local texture error, auth và
+stream/checksum/SDK errors; không phải benchmark AI.
+
+Kiểm chứng local ngày 18/11/2026: **48 tests + 44 subtests pass**, 76 file Python compile,
+workflow YAML/Bash syntax hợp lệ, git diff --check sạch. Môi trường Python 3.11 / torch CPU 2.5.1;
+chưa chạy Docker CUDA, GitHub Actions hoặc inference Runpod thật.
+
+Chỉ stage các file source/docs/test đã sửa; không stage venv, keys hay file GLB.
+Không commit `RUNPOD_API_KEY` hoặc `GATEWAY_API_KEY`.
+
+## 3. Build và cấu hình Runpod
+
+Repo đã có GitHub Actions chạy test → Docker build → push GHCR → cập nhật Runpod.
+Workflow kích hoạt khi push nhánh `main` hoặc Run workflow thủ công.
+
+1. Bật Actions và quyền GitHub Packages cho repo. Image sẽ mang tag
+   `ghcr.io/<owner>/<repo>:sha-<commit>`. Dùng tag commit để đối chiếu/rollback.
+2. Nếu GHCR private, cấu hình registry credentials trong Runpod; nếu public, kiểm tra
+   worker kéo được image. Không đưa GitHub token vào image.
+3. Dùng **Serverless queue-based endpoint** chạy Dockerfile của repo; không phải HTTP load-balancer.
+   Container entrypoint là `start.sh` → `runpod_handler.py`.
+4. Ban đầu đặt min workers 0, max workers 1, concurrency 1. Thử tier 24 GB VRAM;
+   nếu OOM, xem stage/RAM trước khi đổi GPU. Repo lai/offload chưa có số đo cam kết.
+5. Bảo đảm disk/RAM đủ chứa weights và CPU-offloaded models; theo dõi log tải model.
+   Nếu dùng network volume cho cache, trỏ HF_HOME vào volume đã mount theo cấu hình Runpod.
+6. Đặt GitHub Secret `RUNPOD_API_KEY` có quyền `serverless:write` và quyền gọi job
+   trên endpoint thử nghiệm. Đặt GitHub Variables `RUNPOD_ENDPOINT_ID` trỏ tới endpoint đó.
+   Workflow cập nhật trường `image` trực tiếp trên endpoint qua Runpod REST API v2.
+7. Khi thiếu key hoặc endpoint ID, workflow chỉ build/push và báo skip deploy.
+   Khi cập nhật API thất bại, workflow báo lỗi. Có thể đổi image trực tiếp trong
+   Runpod Console rồi chạy smoke riêng.
+8. Xác nhận image tag ở dashboard/worker trước khi kiểm thử. Worker nóng cũ có thể vẫn phục vụ
+   trong lúc rollout; analysis smoke không chứng minh mọi worker đã dùng image mới.
+
+Biến môi trường model (giữ mặc định khi test lần đầu):
 
 ```text
-Client / Frontend local
-        |
-        | POST /run
-        v
-Runpod Serverless Endpoint
-        |
-        v
-runpod_handler.py
-        |
-        +-- action=analyze          -> NSFW model, CPU
-        +-- action=caption          -> BLIP model, CPU
-        +-- action=custom_describe  -> Ollama + LLaVA 7B, GPU
-        +-- action=generate3d       -> Hunyuan3D, GPU
-        |
-        +-- /stream/{job_id} -> tiến độ, runtime và dữ liệu GLB
+HUNYUAN_SHAPE_MODEL=tencent/Hunyuan3D-2.1
+HUNYUAN_SHAPE_SUBFOLDER=hunyuan3d-dit-v2-1
+HUNYUAN_TEX_MODEL=tencent/Hunyuan3D-2
+HUNYUAN_TEX_SUBFOLDER=hunyuan3d-paint-v2-0
+DEFAULT_OCTREE_RESOLUTION=384
+DEFAULT_FACE_COUNT=40000
+DEFAULT_TEXTURE_RESOLUTION=2048
+HUNYUAN_ENABLE_DELIGHT=0
+PRELOAD_MODELS=1
 ```
 
-Một handler trực tiếp sẽ đơn giản hơn việc giữ `gateway.py` cùng các Flask server và gọi qua `localhost`. Các server local cũ có thể được giữ để phục vụ phát triển trên Windows, nhưng không dùng làm entrypoint của container Runpod.
+Các DEFAULT_* là cấu hình người vận hành tin cậy; giữ trong giới hạn API của README.
+Đường CPU test không chứng minh CUDA rasterizer/build image chạy được.
+Không bật nhiều job/GPU cùng lúc với mô hình dùng offload.
 
-## 3. API dự kiến
+## 4. Chạy test thật trên Runpod
 
-### 3.1. Request
+Đặt key vào môi trường shell riêng; không ghi key trong lệnh đã commit, log hay gửi vào chat.
+Ví dụ PowerShell 7 nhập key ẩn:
 
-```json
-{
-  "input": {
-    "action": "generate3d",
-    "image_base64": "...",
-    "prompt": "optional"
-  }
-}
+```powershell
+$env:RUNPOD_API_KEY = Read-Host "Runpod API key" -MaskInput
+$env:RUNPOD_ENDPOINT_ID = "endpoint-id-cua-ban"
+python -m pip install httpx
+python runpod_smoke.py 3d_generative/Hunyuan3D-2-main/assets/example_images/004.png --action analyze
+python runpod_smoke.py 3d_generative/Hunyuan3D-2-main/assets/example_images/004.png --action pipeline --output outputs/test-004.glb
 ```
 
-Các giá trị `action` hợp lệ:
+Chạy các lệnh này có thể phát sinh phí Runpod. Analysis smoke kiểm tra kết quả NSFW thực,
+**không kiểm tra sinh 3D**. Workflow tự chạy analysis smoke khi có endpoint ID;
+thành viên phải chạy thêm lệnh `pipeline` và mở GLB.
 
-- `analyze`
-- `caption`
-- `custom_describe`
-- `generate3d`
+Script chỉ gửi một POST /run, in job ID, đọc stream đến terminal và hết chunk.
+Nó kiểm tra error/FAILED/CANCELLED/TIMED_OUT, done, đủ chunk, size, SHA-256,
+GLB header/JSON, có mesh/texture và không tham chiếu tài nguyên ngoài.
+Đây là kiểm tra cấu trúc cơ bản; vẫn phải mở bằng Viewer để kiểm chứng render.
+Script kiểm tra GLB nguồn theo giới hạn **50 MiB** của Bookaria, tương đương tối đa
+100 chunk 512 KiB. Trần **10 MiB** áp dụng cho GLB sau tối ưu trước khi phân phối. Không ghi đè file output đã có; dùng tên mới cho lần test khác.
 
-Handler phải kiểm tra action, định dạng ảnh và kích thước payload trước khi chạy model.
+Nếu timeout/mất kết nối, xem job ID vừa in ở dashboard; kiểm tra/hủy job cũ trước khi
+chạy lại để tránh tính phí trùng. Khi POST timeout chưa có ID, kiểm tra queue Runpod,
+không tự retry. Script dừng chờ sau 30 phút; policy job đặt execution 20 phút, ttl 30 phút.
+Thời gian khởi động/tải weights có thể cần điều chỉnh theo môi trường thử.
 
-### 3.2. Response dạng stream
+Trong lúc test ghi:
+- GPU, VRAM/RAM peak, image tag, checkpoint, seed, preset.
+- Cold start và thời gian từng stage trong log; có OOM/fallback hay không.
+- GLB trước tối ưu, GLB sau tối ưu Bookaria và số tam giác.
+- Texture, mặt sau, chi tiết nhỏ, hướng và tỷ lệ vật thể, kết quả trên điện thoại.
+- Một job lỗi rồi một job tốt tiếp theo để kiểm tra giải phóng bộ nhớ.
 
-Dùng endpoint bất đồng bộ `/run`, sau đó frontend đọc `/stream/{job_id}`. Không dùng `/runsync` cho GLB vì payload base64 có thể lớn hơn giới hạn response đồng bộ.
+Dùng 12–20 ảnh đại diện sau khi một ảnh chạy được; không mở rộng worker trước khi kiểm tra
+chi phí cho một model được chấp nhận. Người đọc sách dùng lại asset đã lưu, không gọi GPU.
 
-Các event mẫu:
+## 5. Cách nối Bookaria sau khi test GPU đạt
 
-```json
-{"type":"progress","stage":"preprocess","elapsed_ms":438}
-{"type":"progress","stage":"shape_generation","elapsed_ms":17432}
-{"type":"progress","stage":"texture_generation","elapsed_ms":28110}
-{"type":"file_meta","name":"model.glb","size":4656916,"chunks":9,"sha256":"..."}
-{"type":"file_chunk","index":0,"data":"...base64..."}
-{"type":"done","timings":{"total_ms":52140}}
-```
-
-Chia file theo block khoảng **512 KiB dữ liệu thô**. Sau khi mã hóa base64, mỗi event vẫn thấp hơn giới hạn 1 MB cho một stream chunk. Frontend ghép các block theo `index`, kiểm tra SHA-256 rồi tạo file GLB để tải xuống hoặc hiển thị.
-
-Với các action không sinh file, event cuối trả JSON thông thường.
-
-## 4. Quản lý vòng đời model
-
-Model được lazy-load theo action để request nhẹ không phải nạp tất cả model:
-
-- NSFW và BLIP chạy trên CPU.
-- Hunyuan3D chỉ nạp khi gọi `generate3d`.
-- Ollama daemon khởi động cùng container, nhưng `llava:7b` chỉ nạp khi cần.
-- Sau khi LLaVA hoàn thành, gọi unload bằng `keep_alive=0` để giải phóng VRAM trước khi chạy Hunyuan3D.
-- Runpod cấu hình concurrency bằng 1, nên chưa cần hàng đợi hoặc lock riêng trong ứng dụng.
-
-Giữ nguyên các tham số Hunyuan hiện tại:
-
-- Texture: bật.
-- Octree resolution: `256`.
-- Inference steps: `5`.
-- Guidance scale: `5`.
-- Face reduction: mặc định tối đa `200000` để giữ chi tiết hình học.
-
-Các đường dẫn Windows cố định trong mã hiện tại phải được đổi thành đường dẫn Linux hoặc thư mục tạm do Python tạo.
-
-## 5. Lưu trữ model: Network Volume hay Hugging Face
-
-### 5.1. Network Volume
-
-Ưu điểm:
-
-- Kiểm soát hoàn toàn file model và phiên bản.
-- Có thể dùng cho model riêng hoặc model không có trên Hugging Face.
-- Model tồn tại ngoài vòng đời worker.
-
-Nhược điểm:
-
-- Có chi phí lưu trữ cố định dù tải chỉ 10–20 request/ngày.
-- Endpoint bị giới hạn theo vùng có volume, làm giảm tập GPU khả dụng và tăng khả năng thiếu GPU.
-- Cần quy trình tải, đồng bộ và quản lý model trên volume.
-- Không đem lại nhiều lợi ích khi model đã có sẵn trên Hugging Face.
-
-### 5.2. Hugging Face + Runpod Cached Models
-
-Ưu điểm:
-
-- Không phải tự quản lý volume.
-- Không khóa endpoint vào một vùng chứa volume.
-- Model được tải/cached gần worker và có thể dùng khi scale từ 0.
-- Phù hợp với tải thấp và các model public hiện tại.
-
-Nhược điểm:
-
-- Cold start đầu tiên vẫn có thể lâu nếu cache chưa sẵn sàng.
-- Model public có thể thay đổi nếu tham chiếu `main`; vì vậy phải pin commit SHA/revision.
-- Model private hoặc gated cần cấu hình Hugging Face token.
-- Layout model của Ollama không tương thích trực tiếp với Hugging Face cache.
-
-### 5.3. Quyết định
-
-Chọn **Hugging Face + Runpod Cached Models**, không dùng Network Volume trong giai đoạn đồ án.
-
-- Hunyuan3D dùng repository chính chủ Tencent, không dùng bản cộng đồng: mặc định `tencent/Hunyuan3D-2.1` / `hunyuan3d-dit-v2-1`.
-- BLIP dùng `Salesforce/blip-image-captioning-large`.
-- NSFW dùng `strangerguardhf/nsfw_image_detection`.
-- Tất cả tham chiếu phải pin theo commit SHA sau khi xác nhận phiên bản đang chạy tốt.
-- Ollama binary và model `llava:7b` được đóng sẵn trong Docker image vì định dạng lưu trữ của Ollama khác Hugging Face cache.
-
-Không cần upload lại Hunyuan lên tài khoản Hugging Face cá nhân. Chỉ cần token nếu Runpod yêu cầu truy cập model private/gated; các model public có thể cấu hình bằng model reference trực tiếp.
-
-## 6. Phần cứng và cấu hình Serverless
-
-### Cấu hình ban đầu
-
-- GPU tier: **24 GB VRAM, Standard**.
-- GPU ưu tiên: **RTX 3090**, sau đó **L4**, rồi **RTX A5000** tùy khả dụng.
-- `workersMin = 0` để scale về 0 khi không dùng.
-- `workersMax = 1`.
-- Concurrency mỗi worker: `1`.
-- Idle timeout: khoảng `5` giây.
-- Execution timeout: `20` phút để đủ thời gian cold start và sinh texture.
-- Không gắn Network Volume.
-
-Không chọn GPU 16 GB ngay từ đầu. Hunyuan3D shape + texture cần vùng nhớ sát giới hạn này và container còn phải có dư địa cho runtime, rasterizer và phân mảnh VRAM. GPU 24 GB là điểm cân bằng chi phí/rủi ro hợp lý.
-
-Chỉ nâng lên tier 48 GB nếu benchmark thực tế cho thấy 24 GB bị OOM sau khi đã xác nhận LLaVA được unload đúng cách.
-
-### Ước tính chi phí compute
-
-Theo mức tham khảo khoảng **0,69 USD/giờ** cho Serverless Standard 24 GB:
-
-- 5 phút xử lý: khoảng 0,058 USD/job.
-- 10 phút xử lý: khoảng 0,115 USD/job.
-- 20 job/ngày, mỗi job 5 phút: khoảng 34,5 USD/tháng.
-
-Đây chỉ là ước tính; chi phí thật phụ thuộc cold start, thời gian sinh texture và giá tại thời điểm triển khai.
-
-## 7. Docker image
-
-Các file tối thiểu cần thêm:
+Đây là phạm vi triển khai tiếp theo, chưa nằm trong bản sửa repo GPU:
 
 ```text
-Dockerfile
-.dockerignore
-start.sh
-requirements-runpod.txt
-runpod_handler.py
-test_handler.py
+Studio chọn IMAGE → Bookaria kiểm tra quyền/quota → job GENERATE_MODEL
+→ Runpod /run action=pipeline → lưu Runpod job ID → đọc stream
+→ kiểm tra GLB → optimizeModel/storage hiện có → asset MODEL READY
+→ Studio xem trước/chèn scene → Viewer hiện có
 ```
 
-Yêu cầu cho image:
+- Request từ Studio chỉ có sourceAssetId và preset; backend xác minh ảnh thuộc quyền user.
+  Key Runpod ở backend. Không nhận URL tùy ý hoặc để browser gọi trực tiếp.
+- Thêm DB enum/job schema/result/handler; đồng bộ contracts Studio và nhãn admin/notifications.
+  Tái dùng pg-boss đang có, không cần thêm queue framework.
+- Lưu provider job ID ngay khi submit thành công. Retry tiếp tục theo dõi job cũ;
+  xử lý riêng trường hợp submit timeout chưa biết ID. Quota số lần tạo khác quota lưu file.
+- /run giới hạn body 10 MB; encode Base64 làm tăng khoảng 4/3. Resize ảnh và kiểm tra toàn body.
+  Một ảnh dùng chung shape/texture chỉ cần gửi một lần.
+- Backend từ chối GLB nguồn >50 MiB. Sau tối ưu, GLB tối đa 10 MiB, texture tối đa
+  1024 px/cạnh và mục tiêu 50k tam giác. Smoke chọn face_count=40000/texture=1024.
+  Nếu file vẫn quá lớn, điều chỉnh preset trước; không tăng upload cap toàn hệ thống mù quáng.
+- Backend đọc ảnh từ R2 bằng object key, chuẩn bị ảnh theo giới hạn Runpod rồi gửi Base64.
+  Sau khi xác minh GLB, lưu bằng adapter R2 hiện có với MIME `model/gltf-binary` và
+  metadata định dạng `glb`. Database giữ object key, Studio/Viewer dùng URL từ `R2_PUBLIC_URL`.
+  Credentials R2 ở backend. Cấu hình CORS R2 cho origin thực tế của Studio và Viewer.
+- Chỉ READY khi optimize và upload storage thành công; thất bại cần đánh FAILED/cleanup/quota.
+  Theo dõi timeout pg-boss đang mặc định 900 giây, không để job GPU dài bị retry tạo trùng.
+- Studio thêm chọn ảnh/tạo/progress/lỗi/preview/chèn. Viewer đọc MODEL chuẩn, không cần gọi GPU.
+- Tests tích hợp cần chứng minh ownership, giới hạn lượt, retry không duplicate, stream hỏng,
+  asset chỉ READY sau storage thành công, tải lại trang vẫn theo dõi job.
 
-1. Base image Linux có CUDA/PyTorch tương thích với Hunyuan3D.
-2. Build theo kiến trúc `linux/amd64`.
-3. Cài dependency Python đã pin phiên bản.
-4. Build/cài rasterizer native của Hunyuan3D.
-5. Cài Ollama.
-6. Tải `llava:7b` vào image trong giai đoạn build.
-7. `start.sh` khởi động Ollama daemon, chờ health check rồi chạy Runpod worker.
-8. Không copy model Hugging Face lớn vào image.
-9. Không copy file output, virtual environment, cache, ảnh mẫu hoặc secret vào image.
+## 6. Local và rollback
 
-Trước khi push, chạy local handler test và build image để bắt lỗi import/path. Việc kiểm thử GPU cuối cùng phải thực hiện bằng một request thật trên Runpod.
+Local gateway cần `GATEWAY_API_KEY`; request có Bearer header. Service nội bộ 5001/5003
+chỉ loopback; không expose chúng trực tiếp. Gateway là công cụ thử cho nhóm,
+chưa có user ownership/quota/retention của Bookaria. Nếu dùng tunnel/reverse proxy,
+key vẫn phải giữ phía server; không gửi vào frontend công khai.
 
-## 8. Các giai đoạn triển khai
+Rollback bằng image tag commit trước đó trong Runpod/template. Kiểm tra lại worker image,
+analysis và một pipeline job; không xóa storage hay sửa database Bookaria để rollback worker.
 
-### Giai đoạn 1 — Chuẩn hóa handler
+Tài liệu tham chiếu:
+- [Runpod operations: payload, stream, cancel](https://docs.runpod.io/serverless/endpoints/operation-reference)
+- [Runpod SDK xử lý stream/error](https://github.com/runpod/runpod-python/blob/main/runpod/serverless/modules/rp_job.py)
+- [Hunyuan 2.1](https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1)
+- [Hunyuan 2.0 license](https://github.com/Tencent-Hunyuan/Hunyuan3D-2/blob/main/LICENSE)
+- [Hunyuan 2.1 license](https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1/blob/main/LICENSE)
 
-- Thêm `runpod_handler.py` làm entrypoint duy nhất.
-- Route bốn action vào code/model hiện có, không dựng lại logic model.
-- Thay đường dẫn Windows bằng đường dẫn Linux/tạm.
-- Chuẩn hóa JSON error và validation đầu vào.
-- Viết một test nhỏ cho route action, validation và chunk GLB.
-
-### Giai đoạn 2 — Tối ưu bộ nhớ
-
-- Lazy-load từng model.
-- Chạy NSFW và BLIP trên CPU.
-- Đảm bảo LLaVA unload khỏi GPU sau request.
-- Chỉ giữ Hunyuan trên GPU khi `generate3d` đang chạy.
-- Log VRAM trước/sau mỗi giai đoạn để xác nhận 24 GB đủ dùng.
-
-### Giai đoạn 3 — Progress và runtime
-
-Backend phát event cho các giai đoạn có thật:
-
-- Worker/model initialization.
-- Decode input.
-- Preprocess.
-- NSFW/caption/LLaVA inference tùy action.
-- Shape generation.
-- Texture generation.
-- Mesh cleanup/reduction.
-- GLB export.
-- Chunking/streaming.
-- Total.
-
-Frontend chỉ hiển thị timing backend gửi về; đồng thời có thể hiển thị thêm queue delay, Runpod execution time và tổng thời gian phía client.
-
-### Giai đoạn 4 — Docker và kiểm thử local
-
-- Hoàn thiện Dockerfile và `.dockerignore`.
-- Build `linux/amd64`.
-- Chạy test handler không GPU.
-- Kiểm tra container khởi động được và Ollama health check thành công.
-- Push image thử nghiệm lên GHCR.
-
-### Giai đoạn 5 — Tạo tài nguyên Runpod lần đầu
-
-- Tạo credential để Runpod đọc private GHCR image.
-- Tạo Runpod template trỏ đến image bằng immutable tag.
-- Cấu hình Hugging Face cached model references.
-- Tạo một Serverless endpoint dùng template đó.
-- Áp dụng cấu hình GPU và autoscaling ở mục 6.
-- Gọi thử cả bốn action.
-- Mở GLB trả về để xác nhận file không hỏng.
-- Ghi lại cold start, thời gian inference, VRAM và chi phí thực tế.
-
-### Giai đoạn 6 — CI/CD qua GitHub Actions
-
-Workflow chạy khi push vào `main`:
-
-1. Checkout repository.
-2. Chạy test nhẹ.
-3. Đăng nhập GHCR bằng `GITHUB_TOKEN`.
-4. Build image `linux/amd64` bằng Docker Buildx.
-5. Push immutable tag:
-
-   ```text
-   ghcr.io/yuika-sama/3d_hunyuan_be_test:sha-<commit_sha>
-   ```
-
-6. Đọc image hiện tại của Runpod template để lưu thông tin rollback.
-7. Gọi Runpod REST API cập nhật `imageName` của template sang tag mới; Runpod thực hiện rolling release cho endpoint dùng template.
-8. Gửi một smoke test rẻ bằng action `analyze`.
-9. Nếu smoke test thất bại, PATCH template về image tag trước đó và làm workflow thất bại.
-
-Không dùng tag `latest` làm nguồn deploy chính vì khó xác định chính xác phiên bản và rollback.
-
-### GitHub secrets/variables
-
-Secrets:
-
-- `RUNPOD_API_KEY`
-
-Variables:
-
-- `RUNPOD_TEMPLATE_ID`
-- `RUNPOD_ENDPOINT_ID`
-
-GitHub Actions cần quyền:
-
-```yaml
-permissions:
-  contents: read
-  packages: write
-```
-
-Runpod cần một GitHub Personal Access Token chỉ có quyền tối thiểu `read:packages` để pull image private từ GHCR. Token này cấu hình trong Runpod Container Registry Authentication, không đưa vào repository hoặc Docker image.
-
-## 9. Frontend kiểm thử local-only
-
-Tạo frontend HTML/JS đơn giản từ file test hiện có, với các chức năng:
-
-- Chọn action.
-- Chọn ảnh.
-- Gửi request lên Runpod `/run`.
-- Poll status và đọc `/stream/{job_id}`.
-- Hiển thị progress và runtime từng giai đoạn.
-- Ghép các GLB chunk.
-- Kiểm tra SHA-256.
-- Xem trước GLB và tải file.
-
-Frontend không được commit. Thêm đường dẫn file/thư mục frontend vào:
-
-```text
-.git/info/exclude
-```
-
-Không thêm vào `.gitignore`, vì thay đổi `.gitignore` vẫn bị commit và làm lộ việc tồn tại của file local. Sau khi tạo frontend, kiểm tra bằng `git status` và `git ls-files` để chắc chắn file không được track.
-
-Không lưu Runpod API key vào source, `localStorage` hoặc query string. Chỉ nhập key tạm trong UI khi test hoặc dùng một proxy local nếu cần dùng lâu dài.
-
-## 10. Bảo mật và vận hành
-
-- Không commit Runpod API key, Hugging Face token hoặc GHCR PAT.
-- Không in secret trong log GitHub Actions hoặc log worker.
-- Giới hạn kích thước ảnh đầu vào trước khi decode.
-- Chỉ chấp nhận các MIME ảnh dự kiến.
-- Xóa file tạm sau khi stream xong hoặc khi job thất bại.
-- Trả lỗi có `stage` và thông báo đủ để debug, không trả stack trace cho client.
-- Pin Docker base image, Python dependency và Hugging Face revision.
-- Giữ `workersMin=0`; chỉ tăng lên 1 nếu cold start ảnh hưởng buổi demo.
-
-## 11. Tiêu chí nghiệm thu
-
-- Một Runpod Serverless endpoint xử lý đủ bốn action.
-- Endpoint scale về 0 khi không có request.
-- Cấu hình 24 GB hoàn thành `generate3d` mà không OOM.
-- Chất lượng Hunyuan3D giữ nguyên thiết lập hiện tại.
-- GLB trả hoàn toàn qua API, kiểm tra SHA-256 đúng và mở được.
-- Frontend hiển thị runtime từng giai đoạn.
-- Push vào `main` tự động build, push GHCR, cập nhật template và smoke test.
-- Có rollback tự động nếu smoke test thất bại.
-- Frontend test không xuất hiện trong Git history.
-- Không có secret trong repository, image hoặc log.
-
-## 12. Thứ tự thực hiện khuyến nghị
-
-1. Viết handler và test nhỏ.
-2. Chuẩn hóa đường dẫn/model loading.
-3. Thêm streaming GLB và timing.
-4. Đóng Docker, kiểm tra local.
-5. Push image đầu tiên lên GHCR.
-6. Tạo template và endpoint Runpod thủ công lần đầu.
-7. Benchmark request thật trên GPU 24 GB.
-8. Thêm GitHub Actions sau khi deployment thủ công đã chạy ổn định.
-9. Tạo frontend local-only và kiểm thử end-to-end.
-
-Thứ tự này tránh debug đồng thời code, Docker, Runpod và CI/CD.
-
-## 13. Tài liệu tham khảo
-
-- [Runpod Serverless model caching](https://docs.runpod.io/serverless/endpoints/model-caching)
-- [Runpod pricing](https://www.runpod.io/pricing)
-- [Runpod REST API specification](https://rest.runpod.io/v1/openapi.json)
-- [Tencent Hunyuan3D-2 repository](https://github.com/Tencent-Hunyuan/Hunyuan3D-2)
-- [Tencent Hunyuan3D-2.1 on Hugging Face](https://huggingface.co/tencent/Hunyuan3D-2.1)
+Cần rà giấy phép cả shape 2.1 và paint 2.0 trước phát hành; giới hạn lãnh thổ có thể áp dụng
+cho output. Chưa có benchmark GPU hoặc cam kết chất lượng/chi phí từ bộ test CPU.
 
