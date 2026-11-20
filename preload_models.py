@@ -84,18 +84,10 @@ except Exception:
 
 def preload_shape_checkpoint():
     """Download shape weights without instantiating the multi-GB model."""
-    from huggingface_hub import snapshot_download
+    from hy3dgen.shape_checkpoint import smart_load_model
 
-    extension = "safetensors" if HUNYUAN_SHAPE_USE_SAFETENSORS else "ckpt"
-    snapshot_download(
-        repo_id=HUNYUAN_SHAPE_MODEL,
-        allow_patterns=[
-            f"{HUNYUAN_SHAPE_SUBFOLDER}/*.yaml",
-            f"{HUNYUAN_SHAPE_SUBFOLDER}/*.json",
-            f"{HUNYUAN_SHAPE_SUBFOLDER}/*.{extension}",
-        ],
-        max_workers=2,
-    )
+    return smart_load_model(HUNYUAN_SHAPE_MODEL, HUNYUAN_SHAPE_SUBFOLDER,
+                            HUNYUAN_SHAPE_USE_SAFETENSORS, "fp16")
 
 
 def preload(full_texture: bool = False, include_nsfw: bool = False):

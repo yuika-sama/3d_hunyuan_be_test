@@ -36,7 +36,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
-          pip install "numpy<2" pillow httpx runpod==2.3.0 pytest fastapi python-multipart
+          pip install "numpy<2" safetensors pillow httpx runpod==2.3.0 pytest fastapi python-multipart
 
       - name: Build and test the native texture module
         working-directory: 3d_generative/Hunyuan3D-2-main/hy3dgen/texgen/differentiable_renderer
