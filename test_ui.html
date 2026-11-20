@@ -131,29 +131,54 @@
           </div>
         </div>
 
+        <!-- Presets Quick Switcher -->
+        <div class="pt-2 border-t border-slate-800">
+          <label class="block text-[11px] font-semibold text-slate-400 mb-1.5 uppercase">⚡ Preset cấu hình</label>
+          <div class="grid grid-cols-3 gap-2">
+            <button type="button" onclick="applyPreset('fast')" id="presetFastBtn" class="px-2 py-1.5 rounded-lg border text-xs font-medium text-slate-300 border-slate-800 bg-slate-950/60 hover:bg-slate-800 transition text-center">
+              ⚡ Nhanh (~30s)
+            </button>
+            <button type="button" onclick="applyPreset('balanced')" id="presetBalancedBtn" class="px-2 py-1.5 rounded-lg border text-xs font-medium border-indigo-500 bg-indigo-600/20 text-indigo-300 transition text-center">
+              🎨 Cân bằng (~60s)
+            </button>
+            <button type="button" onclick="applyPreset('quality')" id="presetQualityBtn" class="px-2 py-1.5 rounded-lg border text-xs font-medium text-slate-300 border-slate-800 bg-slate-950/60 hover:bg-slate-800 transition text-center">
+              💎 Chi tiết (~3p)
+            </button>
+          </div>
+        </div>
+
         <!-- Detailed 3D Parameters (Accordion / Grid) -->
         <div id="paramsSection" class="space-y-3 pt-2">
           <div class="grid grid-cols-2 gap-3 text-xs">
             <div>
-              <label class="block font-medium text-slate-300 mb-1">Texture</label>
-              <select id="paramTexture" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500">
-                <option value="true" selected>Bật (Đầy đủ màu sắc)</option>
-                <option value="false">Tắt (Chỉ lấy hình học / Mesh trắng)</option>
-              </select>
-            </div>
-            <div>
-              <label class="block font-medium text-slate-300 mb-1">Texture Checkpoint</label>
-              <select id="paramTextureSubfolder" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500">
-                <option value="hunyuan3d-paint-v2-0" selected>Standard (hunyuan3d-paint-v2-0)</option>
-                <option value="hunyuan3d-paint-v2-0-turbo">Turbo (Nhanh hơn)</option>
+              <label class="block font-medium text-slate-300 mb-1">Số bước sinh (Inference Steps)</label>
+              <select id="paramSteps" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500">
+                <option value="20">20 (Rất nhanh)</option>
+                <option value="25">25 (Nhanh, mượt)</option>
+                <option value="35" selected>35 (Cân bằng - Khuyến nghị)</option>
+                <option value="50">50 (Mặc định gốc - Chậm)</option>
               </select>
             </div>
             <div>
               <label class="block font-medium text-slate-300 mb-1">Octree Resolution</label>
               <select id="paramOctree" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500">
-                <option value="256">256 (Nhanh, nhẹ)</option>
+                <option value="256">256 (Nhanh hơn 3x, nhẹ VRAM)</option>
                 <option value="384" selected>384 (Tiêu chuẩn)</option>
-                <option value="512">512 (Chi tiết cao)</option>
+                <option value="512">512 (Chi tiết cao, rất nặng)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block font-medium text-slate-300 mb-1">Texture Checkpoint</label>
+              <select id="paramTextureSubfolder" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500">
+                <option value="hunyuan3d-paint-v2-0-turbo" selected>Turbo (Nhanh gấp 3-4x, màu đẹp)</option>
+                <option value="hunyuan3d-paint-v2-0">Standard (hunyuan3d-paint-v2-0, Chậm)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block font-medium text-slate-300 mb-1">Độ phân giải Texture</label>
+              <select id="paramTextureRes" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500">
+                <option value="1024" selected>1024 px (Tối ưu Bookaria, nhẹ & nhanh)</option>
+                <option value="2048">2048 px (2K - Nặng hơn)</option>
               </select>
             </div>
             <div>
@@ -164,6 +189,19 @@
                 <option value="80000">80,000</option>
               </select>
             </div>
+            <div>
+              <label class="block font-medium text-slate-300 mb-1">Texture (Tô màu)</label>
+              <select id="paramTexture" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500">
+                <option value="true" selected>Bật (Đầy đủ màu sắc)</option>
+                <option value="false">Tắt (Chỉ lấy mesh trắng)</option>
+              </select>
+            </div>
+          </div>
+          <div class="pt-1">
+            <label class="flex items-center gap-2 cursor-pointer text-xs text-indigo-300">
+              <input type="checkbox" id="paramForceRembg" checked class="w-4 h-4 rounded bg-slate-950 border-slate-700 text-indigo-600 focus:ring-0" />
+              <span>Luôn tự động tách nền AI (u2net) - <span class="text-slate-400">Tránh lỗi tạo khối phẳng bao quanh</span></span>
+            </label>
           </div>
           <div>
             <label class="block text-xs font-medium text-slate-300 mb-1">Seed (Tùy chọn)</label>
@@ -385,6 +423,42 @@
       }
     });
 
+    function applyPreset(name) {
+      const pFast = document.getElementById('presetFastBtn');
+      const pBal = document.getElementById('presetBalancedBtn');
+      const pQual = document.getElementById('presetQualityBtn');
+      const defaultBtnClass = "px-2 py-1.5 rounded-lg border text-xs font-medium text-slate-300 border-slate-800 bg-slate-950/60 hover:bg-slate-800 transition text-center";
+      pFast.className = defaultBtnClass;
+      pBal.className = defaultBtnClass;
+      pQual.className = defaultBtnClass;
+
+      if (name === 'fast') {
+        pFast.className = "px-2 py-1.5 rounded-lg border text-xs font-medium border-emerald-500 bg-emerald-600/20 text-emerald-300 transition text-center";
+        document.getElementById('paramSteps').value = "25";
+        document.getElementById('paramOctree').value = "256";
+        document.getElementById('paramTextureSubfolder').value = "hunyuan3d-paint-v2-0-turbo";
+        document.getElementById('paramTextureRes').value = "1024";
+        document.getElementById('paramFaces').value = "40000";
+        appendLog("Đã chọn Preset: ⚡ Nhanh (~30s, Steps=25, Octree=256, Turbo Paint 1024px)");
+      } else if (name === 'balanced') {
+        pBal.className = "px-2 py-1.5 rounded-lg border text-xs font-medium border-indigo-500 bg-indigo-600/20 text-indigo-300 transition text-center";
+        document.getElementById('paramSteps').value = "35";
+        document.getElementById('paramOctree').value = "384";
+        document.getElementById('paramTextureSubfolder').value = "hunyuan3d-paint-v2-0-turbo";
+        document.getElementById('paramTextureRes').value = "1024";
+        document.getElementById('paramFaces').value = "40000";
+        appendLog("Đã chọn Preset: 🎨 Cân bằng (~60s, Steps=35, Octree=384, Turbo Paint 1024px)");
+      } else if (name === 'quality') {
+        pQual.className = "px-2 py-1.5 rounded-lg border text-xs font-medium border-amber-500 bg-amber-600/20 text-amber-300 transition text-center";
+        document.getElementById('paramSteps').value = "50";
+        document.getElementById('paramOctree').value = "384";
+        document.getElementById('paramTextureSubfolder').value = "hunyuan3d-paint-v2-0";
+        document.getElementById('paramTextureRes').value = "2048";
+        document.getElementById('paramFaces').value = "40000";
+        appendLog("Đã chọn Preset: 💎 Chi tiết cao (~3 phút, Steps=50, Octree=384, Standard Paint 2048px)");
+      }
+    }
+
     function handleFileSelect(event) {
       if (event.target.files.length > 0) {
         processFile(event.target.files[0]);
@@ -410,9 +484,30 @@
           const preview = document.getElementById('imagePreview');
           const info = document.getElementById('imageInfo');
           preview.src = selectedImageBase64;
-          info.innerText = `${file.name} (${img.width}x${img.height} px, ${(file.size / 1024).toFixed(1)} KB)`;
+
+          // Check if image has transparency via canvas
+          let hasAlpha = false;
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.min(img.width, 256);
+            canvas.height = Math.min(img.height, 256);
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            let transCount = 0;
+            for (let i = 3; i < imgData.length; i += 4) {
+              if (imgData[i] < 128) transCount++;
+            }
+            hasAlpha = (transCount / (imgData.length / 4)) > 0.03;
+          } catch(err) {}
+
+          const alphaBadge = hasAlpha
+            ? '<span class="text-emerald-400 font-medium">✓ Nền trong suốt (PNG Cutout)</span>'
+            : '<span class="text-amber-400 font-medium">ℹ Có nền đặc &rarr; AI sẽ tự động tách nền sạch</span>';
+
+          info.innerHTML = `${file.name} (${img.width}x${img.height} px, ${(file.size / 1024).toFixed(1)} KB)<br>${alphaBadge}`;
           previewContainer.classList.remove('hidden');
-          appendLog(`Đã tải ảnh: ${file.name} [${img.width}x${img.height}]`);
+          appendLog(`Đã tải ảnh: ${file.name} [${img.width}x${img.height}] - ${hasAlpha ? "Đã có nền trong suốt" : "Ảnh có nền đặc (sẽ chạy rembg)"}`);
         };
         img.src = selectedImageBase64;
       };
@@ -510,8 +605,11 @@
           image_base64: selectedImageBase64,
           texture: document.getElementById('paramTexture').value === 'true',
           texture_subfolder: document.getElementById('paramTextureSubfolder').value,
+          texture_resolution: parseInt(document.getElementById('paramTextureRes').value),
           octree_resolution: parseInt(document.getElementById('paramOctree').value),
+          num_inference_steps: parseInt(document.getElementById('paramSteps').value),
           face_count: parseInt(document.getElementById('paramFaces').value),
+          force_rembg: document.getElementById('paramForceRembg').checked,
         }
       };
 

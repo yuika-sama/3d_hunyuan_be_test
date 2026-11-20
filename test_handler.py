@@ -67,6 +67,22 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertIs(prepare_shape_image(decoded, rembg), decoded)
         rembg.assert_not_called()
 
+    def test_shape_input_runs_rembg_on_opaque_rgba_or_force(self):
+        # 1. Nearly opaque image with only 1 transparent pixel (<3% threshold)
+        opaque_img = Image.new("RGBA", (10, 10), (255, 0, 0, 255))
+        opaque_img.putpixel((0, 0), (255, 0, 0, 200))
+        mock_rembg = MagicMock(return_value=Image.new("RGBA", (10, 10), (0, 0, 0, 0)))
+        res = prepare_shape_image(opaque_img, mock_rembg)
+        mock_rembg.assert_called_once_with(opaque_img)
+
+        # 2. force_rembg=True even with transparent cutout
+        cutout_img = Image.new("RGBA", (8, 8), (255, 0, 0, 0))
+        cutout_img.putpixel((4, 4), (255, 0, 0, 255))
+        mock_rembg.reset_mock()
+        mock_rembg.return_value = Image.new("RGBA", (8, 8), (0, 0, 0, 0))
+        res2 = prepare_shape_image(cutout_img, mock_rembg, force_rembg=True)
+        mock_rembg.assert_called_once_with(cutout_img)
+
     def test_model_manager_tex_pipeline_offload_and_move(self):
         """Move the owning pipeline once; it recursively moves its submodels."""
         mock_pipe = MagicMock()

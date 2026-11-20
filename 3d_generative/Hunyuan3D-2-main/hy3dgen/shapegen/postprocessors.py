@@ -50,24 +50,25 @@ def reduce_face(mesh: pymeshlab.MeshSet, max_facenum: int = 200000):
     )
 
     # Second pass: if strict topology preservation prevented reducing to targetfacenum,
-    # relax topology preservation to ensure mesh face count is bounded
+    # relax quality threshold but keep topology preserved to prevent tearing thin limbs/tails into shards
     if mesh.current_mesh().face_number() > max_facenum * 1.05:
         mesh.apply_filter(
             "meshing_decimation_quadric_edge_collapse",
             targetfacenum=max_facenum,
-            qualitythr=0.1,
+            qualitythr=0.05,
             preserveboundary=True,
             boundaryweight=1.0,
             preservenormal=True,
-            preservetopology=False,
+            preservetopology=True,
             autoclean=True
         )
     return mesh
 
 
-def remove_floater(mesh: pymeshlab.MeshSet):
+def remove_floater(mesh: pymeshlab.MeshSet, nbfaceratio: float = 0.0005):
+    # Conservative threshold to remove detached noise/dust without stripping animal appendages
     mesh.apply_filter("compute_selection_by_small_disconnected_components_per_face",
-                      nbfaceratio=0.005)
+                      nbfaceratio=nbfaceratio)
     mesh.apply_filter("compute_selection_transfer_face_to_vertex", inclusive=False)
     mesh.apply_filter("meshing_remove_selected_vertices_and_faces")
     return mesh

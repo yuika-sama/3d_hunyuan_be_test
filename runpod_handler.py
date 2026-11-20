@@ -257,7 +257,7 @@ def validate_input(job_input):
     aliases = {
         "image": "image_base64", "texture_image": "texture_image_base64",
         "texture_images": "texture_images_base64", "texture_size": "texture_resolution",
-        "subfolder": "texture_subfolder",
+        "subfolder": "texture_subfolder", "rembg": "force_rembg",
     }
     for alias, canonical in aliases.items():
         if alias in data:
@@ -272,7 +272,7 @@ def validate_input(job_input):
     }
     allowed = set(ranges) | {
         "action", "image_base64", "texture_image_base64", "texture_images_base64",
-        "texture", "guidance_scale", "texture_subfolder", "enable_delight",
+        "texture", "guidance_scale", "texture_subfolder", "enable_delight", "force_rembg",
     }
     if set(data) - allowed:
         raise ValueError(f"Unknown input fields: {', '.join(sorted(set(data) - allowed))}.")
@@ -281,7 +281,7 @@ def validate_input(job_input):
             raise ValueError(f"{key} must be an integer between {low} and {high}.")
     if "texture_resolution" in data and data["texture_resolution"] not in (256, 512, 1024, 2048):
         raise ValueError("texture_resolution must be 256, 512, 1024 or 2048.")
-    for key in ("texture", "enable_delight"):
+    for key in ("texture", "enable_delight", "force_rembg"):
         if key in data and type(data[key]) is not bool:
             raise ValueError(f"{key} must be a JSON boolean.")
     if "guidance_scale" in data:
@@ -310,14 +310,20 @@ def validate_input(job_input):
     return data
 
 
-def prepare_shape_image(image: Image.Image, rembg) -> Image.Image:
+def prepare_shape_image(image: Image.Image, rembg, force_rembg: bool = False) -> Image.Image:
     """Keep a supplied cutout intact; infer alpha only for opaque inputs; ensure RGBA."""
-    if image.mode == "RGBA":
+    if not force_rembg and image.mode == "RGBA":
         alpha = image.getchannel("A")
         alpha_min, alpha_max = alpha.getextrema()
         if alpha_max == 0:
             raise ValueError("Image alpha channel is fully transparent.")
-        if alpha_min < 255:
+        if np is not None:
+            alpha_arr = np.array(alpha)
+            transparent_ratio = float(np.mean(alpha_arr < 128))
+            # Keep as cutout only if more than 3% of the image is transparent
+            if transparent_ratio > 0.03:
+                return image
+        elif alpha_min < 255:
             return image
     res = rembg(image)
     if res.mode != "RGBA":
@@ -597,6 +603,7 @@ def handle_generate3d(
     guidance = float(job_input.get("guidance_scale", 5.0))
     face_count = int(job_input.get("face_count", DEFAULT_FACE_COUNT))
     enable_texture = bool(job_input.get("texture", True))
+    force_rembg = bool(job_input.get("force_rembg", False))
 
     # Texture configuration parameters
     tex_res = int(
@@ -655,13 +662,13 @@ def handle_generate3d(
         "elapsed_ms": int((time.time() - start_time) * 1000),
     }
     t_prep_start = time.time()
-    image_no_bg = prepare_shape_image(pil_img, rembg)
+    image_no_bg = prepare_shape_image(pil_img, rembg, force_rembg=force_rembg)
     texture_images_no_bg = []
     for t_img in texture_imgs:
         if t_img is pil_img:
             texture_images_no_bg.append(image_no_bg)
         else:
-            texture_images_no_bg.append(prepare_shape_image(t_img, rembg))
+            texture_images_no_bg.append(prepare_shape_image(t_img, rembg, force_rembg=force_rembg))
     prep_ms = int((time.time() - t_prep_start) * 1000)
 
     # 2. Shape generation
