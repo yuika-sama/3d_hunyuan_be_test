@@ -297,7 +297,15 @@ class Hunyuan3DDiTPipeline:
             model_name = model_path.split('/')[-1]
             if model_name in vae_mapping:
                 model_path, subfolder = vae_mapping[model_name]
-                self.vae = ShapeVAE.from_pretrained(model_path, subfolder=subfolder)
+                use_safe = self.kwargs.get('from_pretrained_kwargs', {}).get('use_safetensors', True)
+                self.vae = ShapeVAE.from_pretrained(
+                    model_path,
+                    subfolder=subfolder,
+                    use_safetensors=use_safe,
+                    device=self.device,
+                )
+            if hasattr(self, 'device') and self.device is not None:
+                self.vae.to(self.device)
             self.vae.enable_flashvdm_decoder(enabled=False)
 
     def to(self, device=None, dtype=None):

@@ -12,6 +12,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     HF_HUB_ENABLE_HF_TRANSFER="0" \
     HF_HUB_DISABLE_SYMLINKS="1" \
     HF_HUB_DISABLE_SYMLINKS_WARNING="1" \
+    HF_MODULES_CACHE="/tmp/bookaria-hf-modules" \
     PYTHONPATH="/app:/app/3d_generative/Hunyuan3D-2-main" \
     RUNPOD_VOLUME_PATH="/runpod-volume"
 

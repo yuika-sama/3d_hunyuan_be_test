@@ -99,19 +99,24 @@ class Hunyuan3DPaintPipeline:
             from huggingface_hub import hf_hub_download, model_info
             base_dir = os.environ.get("HY3DGEN_MODELS", "~/.cache/hy3dgen")
             root = os.path.expanduser(os.path.join(base_dir, model_path))
-            info = model_info(model_path, files_metadata=True)
-            for entry in info.siblings:
-                name = entry.rfilename
-                if not name.startswith((subfolder + "/", "hunyuan3d-delight-v2-0/")):
-                    continue
-                if name.endswith((".ckpt", ".pt", ".onnx")) or name == f"{subfolder}/unet/diffusion_pytorch_model.safetensors":
-                    continue
-                dest = Path(root) / name
-                if not valid(dest, entry.size):
-                    hf_hub_download(repo_id=model_path, filename=name, local_dir=root,
-                                    revision=info.sha, force_download=True)
+            try:
+                info = model_info(model_path, files_metadata=True)
+                for entry in info.siblings:
+                    name = entry.rfilename
+                    if not name.startswith((subfolder + "/", "hunyuan3d-delight-v2-0/")):
+                        continue
+                    if name.endswith((".ckpt", ".pt", ".onnx")) or name == f"{subfolder}/unet/diffusion_pytorch_model.safetensors":
+                        continue
+                    dest = Path(root) / name
                     if not valid(dest, entry.size):
-                        raise IOError(f"Invalid paint asset {dest} after download (expected {entry.size} bytes)")
+                        hf_hub_download(repo_id=model_path, filename=name, local_dir=root,
+                                        revision=info.sha, force_download=True)
+                        if not valid(dest, entry.size):
+                            raise IOError(f"Invalid paint asset {dest} after download (expected {entry.size} bytes)")
+            except Exception as e:
+                if missing_files(root):
+                    raise
+                logger.warning("Failed to query latest model info from HF Hub (%s), but local cached files are complete.", e)
         missing = missing_files(root)
         if missing:
             raise FileNotFoundError(f"Incomplete paint checkpoint in {root}: {missing}")
@@ -270,8 +275,8 @@ class Hunyuan3DPaintPipeline:
             
         images_prompt = [self.recenter_image(image_prompt) for image_prompt in images_prompt]
 
-        # Ensure multiview_model is offloaded to CPU while delight_model runs to prevent simultaneous VRAM spikes
-        if enable_delight and self.models.get('multiview_model') is not None:
+        # Ensure multiview_model is offloaded to CPU during delight and UV unwrapping to prevent VRAM spikes
+        if self.models.get('multiview_model') is not None:
             if hasattr(self.models['multiview_model'], 'to'):
                 self.models['multiview_model'].to('cpu')
             if torch.cuda.is_available():

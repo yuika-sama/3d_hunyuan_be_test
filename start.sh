@@ -45,6 +45,7 @@ fi
 
 # Diffusers copies executable Python modules with file metadata; use a POSIX filesystem.
 export HF_MODULES_CACHE="${HF_MODULES_CACHE:-/tmp/bookaria-hf-modules}"
+mkdir -p "$HF_MODULES_CACHE"
 
 # Export Hugging Face download configuration
 # IMPORTANT for RunPod Global Volumes (S3/FUSE): Disable symlinks to prevent broken references and chmod errors

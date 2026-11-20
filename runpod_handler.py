@@ -7,7 +7,25 @@ Supports 3 actions:
 """
 
 import os
+import shutil
 import sys
+
+# Monkeypatch shutil.copymode to prevent PermissionError on RunPod Global/Network Volumes
+_orig_copymode = shutil.copymode
+def _safe_copymode(src, dst, *args, **kwargs):
+    try:
+        _orig_copymode(src, dst, *args, **kwargs)
+    except PermissionError:
+        pass
+    except OSError as e:
+        if e.errno == 1:
+            pass
+        else:
+            raise
+shutil.copymode = _safe_copymode
+
+# Diffusers dynamic modules must use a local filesystem cache (not network volume)
+os.environ.setdefault("HF_MODULES_CACHE", "/tmp/bookaria-hf-modules")
 
 # Configure volume-based cache paths if Global Volume or Network Volume is mounted
 def resolve_volume_path() -> str:
@@ -371,6 +389,14 @@ class ModelManager:
 
         if "rembg" not in self.hunyuan_worker or self.hunyuan_worker["rembg"] is None:
             logger.info("Loading BackgroundRemover (rembg)...")
+            u2net_home = os.environ.get("U2NET_HOME", os.path.expanduser("~/.u2net"))
+            u2net_path = os.path.join(u2net_home, "u2net.onnx")
+            if os.path.isfile(u2net_path) and os.path.getsize(u2net_path) < 10000:
+                logger.warning(f"Removing truncated/corrupt u2net model at {u2net_path}")
+                try:
+                    os.remove(u2net_path)
+                except OSError:
+                    pass
             from hy3dgen.rembg import BackgroundRemover
             self.hunyuan_worker["rembg"] = BackgroundRemover()
 
@@ -691,10 +717,11 @@ def handle_generate3d(
                 shape_pipeline.enable_flashvdm(enabled=False)
                 gen_dev = device if (torch.cuda.is_available() and str(device).startswith("cuda")) else "cpu"
                 generator = torch.Generator(device=gen_dev).manual_seed(seed)
+                fallback_octree = min(octree_res, 256)
                 outputs = shape_pipeline(
                     image=image_no_bg,
                     generator=generator,
-                    octree_resolution=octree_res,
+                    octree_resolution=fallback_octree,
                     num_inference_steps=steps,
                     guidance_scale=guidance,
                 )
@@ -724,14 +751,27 @@ def handle_generate3d(
     }
     t_clean_start = time.time()
     try:
+        in_faces = len(getattr(mesh, "faces", []))
+        in_verts = len(getattr(mesh, "vertices", []))
+        logger.info(f"Mesh before cleanup: {in_verts} vertices, {in_faces} faces")
+
+        # Initial reduction if face count is very large, avoiding slow component analysis on 1M+ faces
+        if in_faces > face_count * 2:
+            mesh = FaceReducer()(mesh, max_facenum=face_count * 2)
+
         mesh = FloaterRemover()(mesh)
         mesh = DegenerateFaceRemover()(mesh)
         mesh = FaceReducer()(mesh, max_facenum=face_count)
+
+        out_faces = len(getattr(mesh, "faces", []))
+        out_verts = len(getattr(mesh, "vertices", []))
+        logger.info(f"Mesh after cleanup: {out_verts} vertices, {out_faces} faces")
     except Exception as e:
         logger.warning(
             f"Mesh post-processing encountered an error: {e}. Keeping existing mesh."
         )
     clean_ms = int((time.time() - t_clean_start) * 1000)
+    clean_vram()
 
     # 4. Texture generation
     tex_ms = 0

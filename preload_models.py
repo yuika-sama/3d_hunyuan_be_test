@@ -4,7 +4,25 @@ Pre-downloads rembg, Hunyuan3D model weights, and NSFW models to local cache or 
 Ensures only the selected shape checkpoint is fetched.
 """
 import os
+import shutil
 import sys
+
+# Monkeypatch shutil.copymode to prevent PermissionError on RunPod Global/Network Volumes
+_orig_copymode = shutil.copymode
+def _safe_copymode(src, dst, *args, **kwargs):
+    try:
+        _orig_copymode(src, dst, *args, **kwargs)
+    except PermissionError:
+        pass
+    except OSError as e:
+        if e.errno == 1:
+            pass
+        else:
+            raise
+shutil.copymode = _safe_copymode
+
+# Diffusers dynamic modules must use a local filesystem cache (not network volume)
+os.environ.setdefault("HF_MODULES_CACHE", "/tmp/bookaria-hf-modules")
 
 # Configure volume-based cache paths if Global Volume or Network Volume is mounted
 def resolve_volume_path() -> str:
@@ -104,6 +122,14 @@ def preload(full_texture: bool = False, include_nsfw: bool = False):
 
     print("[PRELOAD] 1/4 Checking / downloading BackgroundRemover model (u2net.onnx)...")
     try:
+        u2net_home = os.environ.get("U2NET_HOME", os.path.expanduser("~/.u2net"))
+        u2net_path = os.path.join(u2net_home, "u2net.onnx")
+        if os.path.isfile(u2net_path) and os.path.getsize(u2net_path) < 10000:
+            print(f"[PRELOAD REPAIR] Removing truncated/corrupt u2net model at {u2net_path}")
+            try:
+                os.remove(u2net_path)
+            except OSError:
+                pass
         from hy3dgen.rembg import BackgroundRemover
         BackgroundRemover()
         print("[PRELOAD] BackgroundRemover ready.")

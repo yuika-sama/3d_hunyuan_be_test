@@ -35,19 +35,33 @@ def load_mesh(path):
 
 
 def reduce_face(mesh: pymeshlab.MeshSet, max_facenum: int = 200000):
-    if max_facenum > mesh.current_mesh().face_number():
+    if max_facenum >= mesh.current_mesh().face_number():
         return mesh
 
     mesh.apply_filter(
         "meshing_decimation_quadric_edge_collapse",
         targetfacenum=max_facenum,
-        qualitythr=1.0,
+        qualitythr=0.3,
         preserveboundary=True,
-        boundaryweight=3,
+        boundaryweight=1.0,
         preservenormal=True,
         preservetopology=True,
         autoclean=True
     )
+
+    # Second pass: if strict topology preservation prevented reducing to targetfacenum,
+    # relax topology preservation to ensure mesh face count is bounded
+    if mesh.current_mesh().face_number() > max_facenum * 1.05:
+        mesh.apply_filter(
+            "meshing_decimation_quadric_edge_collapse",
+            targetfacenum=max_facenum,
+            qualitythr=0.1,
+            preserveboundary=True,
+            boundaryweight=1.0,
+            preservenormal=True,
+            preservetopology=False,
+            autoclean=True
+        )
     return mesh
 
 
@@ -60,21 +74,31 @@ def remove_floater(mesh: pymeshlab.MeshSet):
 
 
 def pymeshlab2trimesh(mesh: pymeshlab.MeshSet):
-    with tempfile.NamedTemporaryFile(suffix='.ply', delete=False) as temp_file:
-        mesh.save_current_mesh(temp_file.name)
-        mesh = trimesh.load(temp_file.name)
+    fd, temp_path = tempfile.mkstemp(suffix='.ply')
+    os.close(fd)
+    try:
+        mesh.save_current_mesh(temp_path)
+        mesh_out = trimesh.load(temp_path)
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
     # 检查加载的对象类型
-    if isinstance(mesh, trimesh.Scene):
+    if isinstance(mesh_out, trimesh.Scene):
         combined_mesh = trimesh.Trimesh()
         # 如果是Scene，遍历所有的geometry并合并
-        for geom in mesh.geometry.values():
+        for geom in mesh_out.geometry.values():
             combined_mesh = trimesh.util.concatenate([combined_mesh, geom])
-        mesh = combined_mesh
-    return mesh
+        mesh_out = combined_mesh
+    return mesh_out
 
 
 def trimesh2pymeshlab(mesh: trimesh.Trimesh):
-    with tempfile.NamedTemporaryFile(suffix='.ply', delete=False) as temp_file:
+    fd, temp_path = tempfile.mkstemp(suffix='.ply')
+    os.close(fd)
+    try:
         if isinstance(mesh, trimesh.scene.Scene):
             for idx, obj in enumerate(mesh.geometry.values()):
                 if idx == 0:
@@ -82,10 +106,16 @@ def trimesh2pymeshlab(mesh: trimesh.Trimesh):
                 else:
                     temp_mesh = temp_mesh + obj
             mesh = temp_mesh
-        mesh.export(temp_file.name)
-        mesh = pymeshlab.MeshSet()
-        mesh.load_new_mesh(temp_file.name)
-    return mesh
+        mesh.export(temp_path)
+        ms = pymeshlab.MeshSet()
+        ms.load_new_mesh(temp_path)
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+    return ms
 
 
 def export_mesh(input, output):
@@ -147,12 +177,11 @@ class DegenerateFaceRemover:
         mesh: Union[pymeshlab.MeshSet, trimesh.Trimesh, Latent2MeshOutput, str],
     ) -> Union[pymeshlab.MeshSet, trimesh.Trimesh, Latent2MeshOutput]:
         ms = import_mesh(mesh)
-
-        with tempfile.NamedTemporaryFile(suffix='.ply', delete=False) as temp_file:
-            ms.save_current_mesh(temp_file.name)
-            ms = pymeshlab.MeshSet()
-            ms.load_new_mesh(temp_file.name)
-
+        try:
+            ms.apply_filter("meshing_remove_duplicate_faces")
+            ms.apply_filter("meshing_remove_null_faces")
+        except Exception:
+            pass
         mesh = export_mesh(mesh, ms)
         return mesh
 

@@ -253,11 +253,24 @@ class HierarchicalVolumeDecoding:
                 expand_num = 1
             for i in range(expand_num):
                 curr_points = dilate(curr_points.unsqueeze(0).to(dtype)).squeeze(0)
+            if (curr_points > 0).sum() == 0:
+                flat_abs = grid_logits.squeeze(0).abs().reshape(-1)
+                k = min(1000, max(64, int(0.01 * flat_abs.numel())))
+                _, min_indices = torch.topk(flat_abs, k=k, largest=False)
+                fallback_mask = torch.zeros_like(curr_points, dtype=torch.bool)
+                fallback_mask.view(-1)[min_indices] = True
+                curr_points = fallback_mask.to(dtype)
             (cidx_x, cidx_y, cidx_z) = torch.where(curr_points > 0)
             next_index[cidx_x * 2, cidx_y * 2, cidx_z * 2] = 1
             for i in range(2 - expand_num):
                 next_index = dilate(next_index.unsqueeze(0)).squeeze(0)
             nidx = torch.where(next_index > 0)
+            if len(nidx[0]) == 0:
+                mid_x, mid_y, mid_z = next_index.shape[0] // 2, next_index.shape[1] // 2, next_index.shape[2] // 2
+                next_index[max(0, mid_x - 1):min(next_index.shape[0], mid_x + 2),
+                           max(0, mid_y - 1):min(next_index.shape[1], mid_y + 2),
+                           max(0, mid_z - 1):min(next_index.shape[2], mid_z + 2)] = 1
+                nidx = torch.where(next_index > 0)
 
             next_points = torch.stack(nidx, dim=1)
             next_points = (next_points * torch.tensor(resolution, dtype=next_points.dtype, device=device) +
@@ -384,12 +397,25 @@ class FlashVDMVolumeDecoding:
                 expand_num = 1
             for i in range(expand_num):
                 curr_points = dilate(curr_points.unsqueeze(0).to(dtype)).squeeze(0)
+            if (curr_points > 0).sum() == 0:
+                flat_abs = grid_logits.squeeze(0).abs().reshape(-1)
+                k = min(1000, max(64, int(0.01 * flat_abs.numel())))
+                _, min_indices = torch.topk(flat_abs, k=k, largest=False)
+                fallback_mask = torch.zeros_like(curr_points, dtype=torch.bool)
+                fallback_mask.view(-1)[min_indices] = True
+                curr_points = fallback_mask.to(dtype)
             (cidx_x, cidx_y, cidx_z) = torch.where(curr_points > 0)
 
             next_index[cidx_x * 2, cidx_y * 2, cidx_z * 2] = 1
             for i in range(2 - expand_num):
                 next_index = dilate(next_index.unsqueeze(0)).squeeze(0)
             nidx = torch.where(next_index > 0)
+            if len(nidx[0]) == 0:
+                mid_x, mid_y, mid_z = next_index.shape[0] // 2, next_index.shape[1] // 2, next_index.shape[2] // 2
+                next_index[max(0, mid_x - 1):min(next_index.shape[0], mid_x + 2),
+                           max(0, mid_y - 1):min(next_index.shape[1], mid_y + 2),
+                           max(0, mid_z - 1):min(next_index.shape[2], mid_z + 2)] = 1
+                nidx = torch.where(next_index > 0)
 
             next_points = torch.stack(nidx, dim=1)
             next_points = (next_points * torch.tensor(resolution, dtype=torch.float32, device=device) +

@@ -20,6 +20,32 @@ def mesh_uv_wrap(mesh):
     if isinstance(mesh, trimesh.Scene):
         mesh = mesh.dump(concatenate=True)
 
+    if hasattr(mesh, "remove_duplicate_faces"):
+        try:
+            mesh.remove_duplicate_faces()
+        except Exception:
+            pass
+    if hasattr(mesh, "remove_degenerate_faces"):
+        try:
+            mesh.remove_degenerate_faces()
+        except Exception:
+            pass
+    if hasattr(mesh, "remove_unreferenced_vertices"):
+        try:
+            mesh.remove_unreferenced_vertices()
+        except Exception:
+            pass
+
+    # Safety decimation: if faces exceed 45000, simplify down to 40000 to prevent xatlas hang or OOM
+    if hasattr(mesh, "faces") and len(mesh.faces) > 45000:
+        if hasattr(mesh, "simplify_quadric_decimation"):
+            try:
+                mesh = mesh.simplify_quadric_decimation(40000)
+                if hasattr(mesh, "remove_unreferenced_vertices"):
+                    mesh.remove_unreferenced_vertices()
+            except Exception:
+                pass
+
     if len(mesh.faces) > 500000000:
         raise ValueError("The mesh has more than 500,000,000 faces, which is not supported.")
 

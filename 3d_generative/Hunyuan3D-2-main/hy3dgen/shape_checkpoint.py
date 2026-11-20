@@ -42,6 +42,8 @@ def smart_load_model(model_path, subfolder, use_safetensors, variant):
 
     if not config.is_file() or config.stat().st_size == 0:
         download(config.name, force=config.exists())
+        if not config.is_file() or config.stat().st_size == 0:
+            download(config.name, force=True)
     if not weights.is_file():
         download(filename)
     try:
