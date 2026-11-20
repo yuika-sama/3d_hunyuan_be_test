@@ -14,6 +14,8 @@
 
 
 import logging
+import json
+from pathlib import Path
 import numpy as np
 import os
 import torch
@@ -82,22 +84,34 @@ class Hunyuan3DPaintPipeline:
                     if not os.path.isfile(os.path.join(root, name))
                     or os.path.getsize(os.path.join(root, name)) <= 1000]
 
+        def valid(dest, expected_size):
+            if not dest.is_file() or dest.stat().st_size != expected_size:
+                return False
+            if dest.suffix == ".json":
+                try:
+                    json.loads(dest.read_text(encoding="utf8"))
+                except (UnicodeError, ValueError):
+                    return False
+            return True
+
         root = model_path
         if not os.path.isdir(model_path):
-            from huggingface_hub import hf_hub_download, snapshot_download
+            from huggingface_hub import hf_hub_download, model_info
             base_dir = os.environ.get("HY3DGEN_MODELS", "~/.cache/hy3dgen")
             root = os.path.expanduser(os.path.join(base_dir, model_path))
-            if missing_files(root) or not os.path.isfile(os.path.join(root, subfolder, "model_index.json")):
-                snapshot_download(
-                    repo_id=model_path, local_dir=root,
-                    allow_patterns=[f"{subfolder}/**", "hunyuan3d-delight-v2-0/**"],
-                    ignore_patterns=["*.ckpt", "*.pt", "*.onnx",
-                                     f"{subfolder}/unet/diffusion_pytorch_model.safetensors"],
-                    max_workers=2,
-                )
-                for name in missing_files(root):
-                    hf_hub_download(repo_id=model_path, filename=name.replace(os.sep, "/"),
-                                    local_dir=root, force_download=True)
+            info = model_info(model_path, files_metadata=True)
+            for entry in info.siblings:
+                name = entry.rfilename
+                if not name.startswith((subfolder + "/", "hunyuan3d-delight-v2-0/")):
+                    continue
+                if name.endswith((".ckpt", ".pt", ".onnx")) or name == f"{subfolder}/unet/diffusion_pytorch_model.safetensors":
+                    continue
+                dest = Path(root) / name
+                if not valid(dest, entry.size):
+                    hf_hub_download(repo_id=model_path, filename=name, local_dir=root,
+                                    revision=info.sha, force_download=True)
+                    if not valid(dest, entry.size):
+                        raise IOError(f"Invalid paint asset {dest} after download (expected {entry.size} bytes)")
         missing = missing_files(root)
         if missing:
             raise FileNotFoundError(f"Incomplete paint checkpoint in {root}: {missing}")

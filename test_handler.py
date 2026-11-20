@@ -606,26 +606,30 @@ class TestRunpodHandler(unittest.TestCase):
         with TemporaryDirectory() as tmp, patch.dict(os.environ, {"HY3DGEN_MODELS": tmp}):
             hub = MagicMock()
             paint_dir = "hunyuan3d-paint-v2-0"
-            def snapshot(repo_id, local_dir, **kwargs):
-                root = Path(local_dir)
-                for name in (f"{paint_dir}/model_index.json", f"{paint_dir}/unet/diffusion_pytorch_model.bin",
-                             f"{paint_dir}/vae/diffusion_pytorch_model.bin", f"{paint_dir}/text_encoder/pytorch_model.bin",
-                             "hunyuan3d-delight-v2-0/unet/diffusion_pytorch_model.safetensors",
-                             "hunyuan3d-delight-v2-0/vae/diffusion_pytorch_model.safetensors",
-                             "hunyuan3d-delight-v2-0/text_encoder/model.safetensors"):
-                    dest = root / name
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    dest.write_bytes(b"x" * 1100)
-                (root / paint_dir / "vae/diffusion_pytorch_model.bin").write_bytes(b"")
-            hub.snapshot_download.side_effect = snapshot
-            hub.hf_hub_download.side_effect = lambda filename, local_dir, **kw: (Path(local_dir) / filename).write_bytes(b"x"*1100)
+            from types import SimpleNamespace
+            files = [f"{paint_dir}/model_index.json", f"{paint_dir}/unet/diffusion_pytorch_model.bin",
+                     f"{paint_dir}/vae/diffusion_pytorch_model.bin", f"{paint_dir}/text_encoder/pytorch_model.bin",
+                     "hunyuan3d-delight-v2-0/unet/diffusion_pytorch_model.safetensors",
+                     "hunyuan3d-delight-v2-0/vae/diffusion_pytorch_model.safetensors",
+                     "hunyuan3d-delight-v2-0/text_encoder/model.safetensors"]
+            contents = {n: (b"{}" if n.endswith(".json") else b"x"*1100) for n in files}
+            hub.model_info.return_value = SimpleNamespace(sha="test-revision", siblings=[
+                SimpleNamespace(rfilename=n, size=len(data)) for n, data in contents.items()])
+            def download(filename, local_dir, **kwargs):
+                dest = Path(local_dir) / filename
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(contents[filename])
+            hub.hf_hub_download.side_effect = download
             with patch.dict("sys.modules", {"huggingface_hub": hub}):
-                for _ in range(2):
-                    paint.Hunyuan3DPaintPipeline.resolve_config("tencent/Hunyuan3D-2", paint_dir)
-            hub.snapshot_download.assert_called_once()
-            hub.hf_hub_download.assert_called_once_with(repo_id="tencent/Hunyuan3D-2",
-                filename=paint_dir+"/vae/diffusion_pytorch_model.bin",
-                local_dir=os.path.join(tmp, "tencent/Hunyuan3D-2"), force_download=True)
+                paint.Hunyuan3DPaintPipeline.resolve_config("tencent/Hunyuan3D-2", paint_dir)
+                hub.hf_hub_download.reset_mock()
+                root = os.path.join(tmp, "tencent/Hunyuan3D-2")
+                (Path(root) / files[0]).write_bytes(b"xx")
+                (Path(root) / files[2]).write_bytes(b"")
+                paint.Hunyuan3DPaintPipeline.resolve_config("tencent/Hunyuan3D-2", paint_dir)
+                paint.Hunyuan3DPaintPipeline.resolve_config("tencent/Hunyuan3D-2", paint_dir)
+                self.assertEqual([c.kwargs["filename"] for c in hub.hf_hub_download.call_args_list],
+                                 [files[0], files[2]])
         pipeline = paint.Hunyuan3DPaintPipeline(config)
         paint.mesh_uv_wrap.side_effect = RuntimeError("reached UV stage")
         for flag, calls in [(None, 0), (True, 1), (None, 1), (True, 2)]:
