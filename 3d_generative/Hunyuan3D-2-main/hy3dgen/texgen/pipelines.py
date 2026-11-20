@@ -77,99 +77,33 @@ class Hunyuan3DPaintPipeline:
         if 'turbo' in subfolder.lower():
             required_weights.append(os.path.join(subfolder, 'image_encoder', 'model.safetensors'))
 
-        def get_missing_weights(root):
-            missing = []
-            for path in required_weights:
-                p = os.path.join(root, path)
-                if not os.path.isfile(p):
-                    missing.append(f"{path} (missing)")
-                elif os.path.getsize(p) <= 1000:
-                    missing.append(f"{path} (size={os.path.getsize(p)} <= 1000 bytes)")
-            return missing
+        def missing_files(root):
+            return [name for name in required_weights
+                    if not os.path.isfile(os.path.join(root, name))
+                    or os.path.getsize(os.path.join(root, name)) <= 1000]
 
-        def has_required_weights(root):
-            return all(
-                os.path.isfile(os.path.join(root, path)) and os.path.getsize(os.path.join(root, path)) > 1000
-                for path in required_weights
-            )
-        original_model_path = model_path
-        if not os.path.exists(model_path):
-            # try local path
-            base_dir = os.environ.get('HY3DGEN_MODELS', '~/.cache/hy3dgen')
-            expanded_model_path = os.path.expanduser(os.path.join(base_dir, model_path))
+        root = model_path
+        if not os.path.isdir(model_path):
+            from huggingface_hub import hf_hub_download, snapshot_download
+            base_dir = os.environ.get("HY3DGEN_MODELS", "~/.cache/hy3dgen")
+            root = os.path.expanduser(os.path.join(base_dir, model_path))
+            if missing_files(root) or not os.path.isfile(os.path.join(root, subfolder, "model_index.json")):
+                snapshot_download(
+                    repo_id=model_path, local_dir=root,
+                    allow_patterns=[f"{subfolder}/**", "hunyuan3d-delight-v2-0/**"],
+                    ignore_patterns=["*.ckpt", "*.pt", "*.onnx",
+                                     f"{subfolder}/unet/diffusion_pytorch_model.safetensors"],
+                    max_workers=2,
+                )
+                for name in missing_files(root):
+                    hf_hub_download(repo_id=model_path, filename=name.replace(os.sep, "/"),
+                                    local_dir=root, force_download=True)
+        missing = missing_files(root)
+        if missing:
+            raise FileNotFoundError(f"Incomplete paint checkpoint in {root}: {missing}")
+        return Hunyuan3DTexGenConfig(os.path.join(root, "hunyuan3d-delight-v2-0"),
+                                     os.path.join(root, subfolder), subfolder, **config_kwargs)
 
-            delight_model_path = os.path.join(expanded_model_path, 'hunyuan3d-delight-v2-0')
-            multiview_model_path = os.path.join(expanded_model_path, subfolder)
-
-            if not os.path.exists(delight_model_path) or not has_required_weights(expanded_model_path):
-                try:
-                    import huggingface_hub
-                    os.environ["HF_HUB_DISABLE_XET"] = "1"
-                    os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
-                    os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
-                    os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-                    ignore_patterns = [
-                        "*.ckpt",
-                        "*.pt",
-                        "*.onnx",
-                        f"{subfolder}/unet/diffusion_pytorch_model.safetensors",
-                    ]
-                    allow_patterns = [
-                        f"{subfolder}/**",
-                        "hunyuan3d-delight-v2-0/**",
-                    ]
-                    # First check local HF cache to avoid redundant network download
-                    try:
-                        resolved_path = huggingface_hub.snapshot_download(
-                            repo_id=original_model_path,
-                            allow_patterns=allow_patterns,
-                            ignore_patterns=ignore_patterns,
-                            local_files_only=True,
-                        )
-                        if not has_required_weights(resolved_path):
-                            missing = get_missing_weights(resolved_path)
-                            print(f"[TEXGEN WARNING] Cached texture model incomplete in {resolved_path}. Issues: {missing}")
-                            raise FileNotFoundError("Cached texture model is incomplete")
-                    except Exception:
-                        resolved_path = huggingface_hub.snapshot_download(
-                            repo_id=original_model_path,
-                            allow_patterns=allow_patterns,
-                            ignore_patterns=ignore_patterns,
-                            max_workers=2,
-                        )
-                        if not has_required_weights(resolved_path):
-                            missing = get_missing_weights(resolved_path)
-                            print(f"[TEXGEN WARNING] Downloaded texture model is incomplete. Issues: {missing}")
-                            # Auto-repair: clean corrupted snapshot directory and force re-download
-                            import shutil
-                            print(f"[TEXGEN REPAIR] Cleaning corrupted cache at {resolved_path} and retrying with force_download=True...")
-                            shutil.rmtree(resolved_path, ignore_errors=True)
-                            resolved_path = huggingface_hub.snapshot_download(
-                                repo_id=original_model_path,
-                                allow_patterns=allow_patterns,
-                                ignore_patterns=ignore_patterns,
-                                max_workers=2,
-                                force_download=True,
-                            )
-                            if not has_required_weights(resolved_path):
-                                missing = get_missing_weights(resolved_path)
-                                raise FileNotFoundError(f"Downloaded texture model is incomplete after repair. Missing: {missing}")
-                    delight_model_path = os.path.join(resolved_path, 'hunyuan3d-delight-v2-0')
-                    multiview_model_path = os.path.join(resolved_path, subfolder)
-                    return Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder, **config_kwargs)
-                except Exception as e:
-                    import traceback
-                    traceback.print_exc()
-                    raise RuntimeError(f"Something wrong while loading {original_model_path}: {e}")
-            else:
-                return Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder, **config_kwargs)
-        else:
-            if not has_required_weights(model_path):
-                raise FileNotFoundError(f"Texture model is incomplete: {model_path}")
-            delight_model_path = os.path.join(model_path, 'hunyuan3d-delight-v2-0')
-            multiview_model_path = os.path.join(model_path, subfolder)
-            return Hunyuan3DTexGenConfig(delight_model_path, multiview_model_path, subfolder, **config_kwargs)
-            
     def __init__(self, config):
         self.config = config
         self.device = getattr(config, 'device', 'cuda' if torch.cuda.is_available() else 'cpu')

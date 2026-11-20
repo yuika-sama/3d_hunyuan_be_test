@@ -601,6 +601,31 @@ class TestRunpodHandler(unittest.TestCase):
             "utils.multiview_utils", "utils.imagesuper_utils", "utils.uv_warp_utils",
         )])
         config = paint.Hunyuan3DTexGenConfig("", "", "hunyuan3d-paint-v2-0", enable_delight=False)
+        from tempfile import TemporaryDirectory
+        import os
+        with TemporaryDirectory() as tmp, patch.dict(os.environ, {"HY3DGEN_MODELS": tmp}):
+            hub = MagicMock()
+            paint_dir = "hunyuan3d-paint-v2-0"
+            def snapshot(repo_id, local_dir, **kwargs):
+                root = Path(local_dir)
+                for name in (f"{paint_dir}/model_index.json", f"{paint_dir}/unet/diffusion_pytorch_model.bin",
+                             f"{paint_dir}/vae/diffusion_pytorch_model.bin", f"{paint_dir}/text_encoder/pytorch_model.bin",
+                             "hunyuan3d-delight-v2-0/unet/diffusion_pytorch_model.safetensors",
+                             "hunyuan3d-delight-v2-0/vae/diffusion_pytorch_model.safetensors",
+                             "hunyuan3d-delight-v2-0/text_encoder/model.safetensors"):
+                    dest = root / name
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_bytes(b"x" * 1100)
+                (root / paint_dir / "vae/diffusion_pytorch_model.bin").write_bytes(b"")
+            hub.snapshot_download.side_effect = snapshot
+            hub.hf_hub_download.side_effect = lambda filename, local_dir, **kw: (Path(local_dir) / filename).write_bytes(b"x"*1100)
+            with patch.dict("sys.modules", {"huggingface_hub": hub}):
+                for _ in range(2):
+                    paint.Hunyuan3DPaintPipeline.resolve_config("tencent/Hunyuan3D-2", paint_dir)
+            hub.snapshot_download.assert_called_once()
+            hub.hf_hub_download.assert_called_once_with(repo_id="tencent/Hunyuan3D-2",
+                filename=paint_dir+"/vae/diffusion_pytorch_model.bin",
+                local_dir=os.path.join(tmp, "tencent/Hunyuan3D-2"), force_download=True)
         pipeline = paint.Hunyuan3DPaintPipeline(config)
         paint.mesh_uv_wrap.side_effect = RuntimeError("reached UV stage")
         for flag, calls in [(None, 0), (True, 1), (None, 1), (True, 2)]:
@@ -623,7 +648,7 @@ class TestRunpodHandler(unittest.TestCase):
         self.assertIn("for module in self.unet.modules()", pipeline_source)
         self.assertIn("self.scheduler.set_timesteps(num_inference_steps=num_inference_steps", pipeline_source)
         self.assertNotIn("class DDIMSolver", pipeline_source)
-        self.assertIn("os.path.getsize(os.path.join(root, path)) > 1000", cache_source)
+        self.assertIn("os.path.getsize(os.path.join(root, name)) <= 1000", cache_source)
         self.assertIn("else torch.float32", component_source)
         self.assertIn("else torch.float32", delight_source)
         preload_source = (Path(__file__).parent / "preload_models.py").read_text(encoding="utf-8")

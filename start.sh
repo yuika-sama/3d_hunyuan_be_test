@@ -43,6 +43,9 @@ else
     export HY3DGEN_MODELS="${HY3DGEN_MODELS:-/root/.cache/hy3dgen}"
 fi
 
+# Diffusers copies executable Python modules with file metadata; use a POSIX filesystem.
+export HF_MODULES_CACHE="${HF_MODULES_CACHE:-/tmp/bookaria-hf-modules}"
+
 # Export Hugging Face download configuration
 # IMPORTANT for RunPod Global Volumes (S3/FUSE): Disable symlinks to prevent broken references and chmod errors
 export HF_HUB_DISABLE_XET="1"
