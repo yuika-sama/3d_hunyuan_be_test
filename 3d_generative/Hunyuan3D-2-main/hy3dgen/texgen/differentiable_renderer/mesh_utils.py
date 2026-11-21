@@ -28,7 +28,14 @@ def load_mesh(mesh):
 
 
 def save_mesh(mesh, texture_data):
-    material = trimesh.visual.texture.SimpleMaterial(image=texture_data, diffuse=(255, 255, 255))
+    # Paint supplies color only; glTF defaults an unspecified metallic factor to 1.
+    material = trimesh.visual.material.PBRMaterial(
+        baseColorTexture=texture_data,
+        baseColorFactor=[255, 255, 255, 255],
+        metallicFactor=0.0,
+        roughnessFactor=0.9,
+        alphaMode="OPAQUE",
+    )
     texture_visuals = trimesh.visual.TextureVisuals(uv=mesh.visual.uv, image=texture_data, material=material)
     mesh.visual = texture_visuals
     return mesh

@@ -17,6 +17,8 @@ Không có bước rig/sinh animation nhân vật.
 | Turbo shape | Chỉ bật FlashVDM khi subfolder shape có `turbo`; mặc định 5 steps khi đó |
 | Runtime | Python 3.10, CUDA 12.1, torch 2.5.1, torchvision 0.20.1, Runpod SDK 2.3.0 |
 
+GLB từ Paint dùng `PBRMaterial` với metallic `0`, roughness `0.9`, giữ texture và UV. Đây là mặc định cho vật liệu màu đơn, không sinh thêm bản đồ metallic/roughness. Kiểm thử CPU: `python -m unittest test_material_export -v`.
+
 Pipeline lai shape 2.1 + paint 2.0; không phải full PBR 2.1. Model được chuyển giữa CPU/GPU
 để giảm VRAM. Cần benchmark cả RAM, VRAM và cold start trên GPU thực tế;
 24 GB VRAM là cấu hình thử nghiệm, không phải cam kết đủ cho mọi ảnh.
