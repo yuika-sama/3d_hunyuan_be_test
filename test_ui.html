@@ -170,8 +170,9 @@
             <div>
               <label class="block font-medium text-slate-300 mb-1">Texture Checkpoint</label>
               <select id="paramTextureSubfolder" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500">
-                <option value="hunyuan3d-paint-v2-0-turbo" selected>Turbo (Nhanh gấp 3-4x, màu đẹp)</option>
-                <option value="hunyuan3d-paint-v2-0">Standard (hunyuan3d-paint-v2-0, Chậm)</option>
+                <option value="auto" selected>Theo RunPod Env (hunyuan3d-paint-v2-0)</option>
+                <option value="hunyuan3d-paint-v2-0">Standard (hunyuan3d-paint-v2-0)</option>
+                <option value="hunyuan3d-paint-v2-0-turbo">Turbo (hunyuan3d-paint-v2-0-turbo)</option>
               </select>
             </div>
             <div>
@@ -276,8 +277,11 @@
           <model-viewer id="modelViewer" 
             camera-controls 
             auto-rotate 
-            shadow-intensity="1.2" 
+            shadow-intensity="1.0" 
+            shadow-softness="0.8"
             exposure="1.0"
+            environment-image="neutral"
+            tone-mapping="neutral"
             ar 
             interaction-prompt="auto"
             alt="3D Hunyuan Generated Model"
@@ -436,26 +440,26 @@
         pFast.className = "px-2 py-1.5 rounded-lg border text-xs font-medium border-emerald-500 bg-emerald-600/20 text-emerald-300 transition text-center";
         document.getElementById('paramSteps').value = "25";
         document.getElementById('paramOctree').value = "256";
-        document.getElementById('paramTextureSubfolder').value = "hunyuan3d-paint-v2-0-turbo";
+        document.getElementById('paramTextureSubfolder').value = "auto";
         document.getElementById('paramTextureRes').value = "1024";
         document.getElementById('paramFaces').value = "40000";
-        appendLog("Đã chọn Preset: ⚡ Nhanh (~30s, Steps=25, Octree=256, Turbo Paint 1024px)");
+        appendLog("Đã chọn Preset: ⚡ Nhanh (~30-40s, Steps=25, Octree=256, 1024px Texture, Model preload RunPod)");
       } else if (name === 'balanced') {
         pBal.className = "px-2 py-1.5 rounded-lg border text-xs font-medium border-indigo-500 bg-indigo-600/20 text-indigo-300 transition text-center";
         document.getElementById('paramSteps').value = "35";
         document.getElementById('paramOctree').value = "384";
-        document.getElementById('paramTextureSubfolder').value = "hunyuan3d-paint-v2-0-turbo";
+        document.getElementById('paramTextureSubfolder').value = "auto";
         document.getElementById('paramTextureRes').value = "1024";
         document.getElementById('paramFaces').value = "40000";
-        appendLog("Đã chọn Preset: 🎨 Cân bằng (~60s, Steps=35, Octree=384, Turbo Paint 1024px)");
+        appendLog("Đã chọn Preset: 🎨 Cân bằng (~60-90s, Steps=35, Octree=384, 1024px Texture, Model preload RunPod)");
       } else if (name === 'quality') {
         pQual.className = "px-2 py-1.5 rounded-lg border text-xs font-medium border-amber-500 bg-amber-600/20 text-amber-300 transition text-center";
         document.getElementById('paramSteps').value = "50";
         document.getElementById('paramOctree').value = "384";
         document.getElementById('paramTextureSubfolder').value = "hunyuan3d-paint-v2-0";
-        document.getElementById('paramTextureRes').value = "2048";
+        document.getElementById('paramTextureRes').value = "1024";
         document.getElementById('paramFaces').value = "40000";
-        appendLog("Đã chọn Preset: 💎 Chi tiết cao (~3 phút, Steps=50, Octree=384, Standard Paint 2048px)");
+        appendLog("Đã chọn Preset: 💎 Chi tiết cao (~3 phút, Steps=50, Octree=384, hunyuan3d-paint-v2-0)");
       }
     }
 
@@ -599,22 +603,26 @@
       const useProxy = document.getElementById('useProxy').checked;
       const baseUrl = useProxy ? `/proxy/${endpointId}` : `https://api.runpod.ai/v2/${endpointId}`;
 
-      const payload = {
-        input: {
-          action: currentAction,
-          image_base64: selectedImageBase64,
-          texture: document.getElementById('paramTexture').value === 'true',
-          texture_subfolder: document.getElementById('paramTextureSubfolder').value,
-          texture_resolution: parseInt(document.getElementById('paramTextureRes').value),
-          octree_resolution: parseInt(document.getElementById('paramOctree').value),
-          num_inference_steps: parseInt(document.getElementById('paramSteps').value),
-          face_count: parseInt(document.getElementById('paramFaces').value),
-          force_rembg: document.getElementById('paramForceRembg').checked,
-        }
+      const subfolderVal = document.getElementById('paramTextureSubfolder').value;
+      const inputPayload = {
+        action: currentAction,
+        image_base64: selectedImageBase64,
+        texture: document.getElementById('paramTexture').value === 'true',
+        texture_resolution: parseInt(document.getElementById('paramTextureRes').value),
+        octree_resolution: parseInt(document.getElementById('paramOctree').value),
+        num_inference_steps: parseInt(document.getElementById('paramSteps').value),
+        face_count: parseInt(document.getElementById('paramFaces').value),
+        force_rembg: document.getElementById('paramForceRembg').checked,
       };
 
+      if (subfolderVal && subfolderVal !== 'auto') {
+        inputPayload.texture_subfolder = subfolderVal;
+      }
+
       const seedVal = document.getElementById('paramSeed').value.trim();
-      if (seedVal) payload.input.seed = parseInt(seedVal);
+      if (seedVal) inputPayload.seed = parseInt(seedVal);
+
+      const payload = { input: inputPayload };
 
       try {
         const runRes = await fetch(`${baseUrl}/run`, {
@@ -737,11 +745,11 @@
 
         // Update UI
         const sizeMb = (currentGlbBlob.size / (1024 * 1024)).toFixed(2);
-        document.getElementById('glbMetaBadge').innerText = `${sizeMb} MB | ${fileMeta.chunks} Chunks`;
+        document.getElementById('glbMetaBadge').innerText = `${sizeMb} MB | PBR Nonmetallic`;
         document.getElementById('glbMetaBadge').classList.remove('hidden');
         document.getElementById('downloadGlbBtn').removeAttribute('disabled');
 
-        appendLog(`HOÀN TẤT! File 3D GLB (${sizeMb} MB) đã sẵn sàng hiển thị trên Viewer.`);
+        appendLog(`HOÀN TẤT! File 3D GLB (${sizeMb} MB - Chuẩn PBR nonmetallic: roughness=0.9, metallic=0.0) đã hiển thị trên WebGL Viewer.`);
         hideProgress();
       } else {
         throw new Error("Dữ liệu stream bị thiếu hoặc không hoàn chỉnh.");
